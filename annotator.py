@@ -156,6 +156,7 @@ class VideoAnnotator(QWidget):
         if self.cap is None: return
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
         ret, frame = self.cap.read()
+        was_superimposed = False
         if ret:
             self.frame_bgr = frame
             mask_path = os.path.join(self.mask_folder, f"mask_{self.current_frame_idx:04d}.png")
@@ -167,10 +168,15 @@ class VideoAnnotator(QWidget):
                     self.mask = np.zeros(self.frame_bgr.shape[:2], dtype=np.uint8)
                 else:
                     self.mask = self.mask.copy()
+                    was_superimposed = True
         else:
             self.frame_bgr = None
             
         self.lbl_frame_info.setText(f"Frame: {self.current_frame_idx}/{self.total_frames - 1}")
+        
+        # Autosave immediately if we just carried over a label to a previously unlabelled frame
+        if was_superimposed:
+            self.save_current_mask()
         
     def clear_mask(self):
         if self.mask is not None:
