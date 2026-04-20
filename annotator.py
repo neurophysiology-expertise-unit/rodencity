@@ -13,7 +13,7 @@ from PyQt5.QtGui import QImage, QPixmap
 class VideoAnnotator(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Mouse Video Annotator (with Auto-Detect & Tilted Arena)")
+        self.setWindowTitle("Mouse Video Annotator (with Export & Invert)")
         
         self.video_path = None
         self.cap = None
@@ -30,7 +30,7 @@ class VideoAnnotator(QWidget):
         
         self.defining_arena = False
         self.arena_polygon_pts = []
-        self.arena_history = {} # frame_idx (int) -> [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
+        self.arena_history = {}
         
         self.mask_folder = None
         self.stats_file = None
@@ -64,13 +64,16 @@ class VideoAnnotator(QWidget):
         
         # --- Auto Subtraction Controls ---
         h_auto = QHBoxLayout()
-        self.btn_calc_baseline = QPushButton("2. Calc Baseline (Median)")
+        self.btn_calc_baseline = QPushButton("2. Calc Baseline")
         self.btn_calc_baseline.clicked.connect(self.calc_baseline)
         
         self.spin_thresh = QSpinBox()
         self.spin_thresh.setRange(1, 255)
         self.spin_thresh.setValue(30)
         self.spin_thresh.setToolTip("Lower = picks up faint things. Higher = blocks shadow.")
+        
+        self.chk_invert = QCheckBox("Invert Detection")
+        self.chk_invert.setToolTip("If the floor becomes detected instead of the mice, check this.")
         
         self.btn_auto_current = QPushButton("Auto Mask Current")
         self.btn_auto_current.clicked.connect(self.apply_auto_mask_current)
@@ -79,8 +82,9 @@ class VideoAnnotator(QWidget):
         self.btn_auto_all.clicked.connect(self.apply_auto_mask_all)
         
         h_auto.addWidget(self.btn_calc_baseline)
-        h_auto.addWidget(QLabel("Detection Threshold:"))
+        h_auto.addWidget(QLabel("Thresh:"))
         h_auto.addWidget(self.spin_thresh)
+        h_auto.addWidget(self.chk_invert)
         h_auto.addWidget(self.btn_auto_current)
         h_auto.addWidget(self.btn_auto_all)
 
@@ -94,10 +98,6 @@ class VideoAnnotator(QWidget):
         self.chk_erase = QCheckBox("Erase Mode")
         self.chk_erase.stateChanged.connect(self.toggle_erase)
         
-        self.btn_save = QPushButton("Save Mask")
-        self.btn_save.clicked.connect(self.save_current_mask)
-        self.btn_clear = QPushButton("Clear Mask")
-        self.btn_clear.clicked.connect(self.clear_mask)
         self.btn_interpolate = QPushButton("Interpolate Gap")
         self.btn_interpolate.clicked.connect(self.interpolate_gap)
         
@@ -105,13 +105,16 @@ class VideoAnnotator(QWidget):
         self.btn_define_arena.setStyleSheet("background-color: #ffd966;")
         self.btn_define_arena.clicked.connect(self.start_arena_definition)
         
+        self.btn_export = QPushButton("4. Export Final Video")
+        self.btn_export.setStyleSheet("background-color: #93c47d;")
+        self.btn_export.clicked.connect(self.export_video)
+        
         h_ctrl.addWidget(QLabel("Brush Size:"))
         h_ctrl.addWidget(self.spin_brush)
         h_ctrl.addWidget(self.chk_erase)
-        h_ctrl.addWidget(self.btn_clear)
         h_ctrl.addWidget(self.btn_interpolate)
         h_ctrl.addWidget(self.btn_define_arena)
-        h_ctrl.addWidget(self.btn_save)
+        h_ctrl.addWidget(self.btn_export)
         
         self.lbl_image = QLabel()
         self.lbl_image.setAlignment(Qt.AlignCenter)
@@ -171,6 +174,52 @@ class VideoAnnotator(QWidget):
         self.read_frame()
         self.update_display()
         
+    # -------- EXPORT VIDEO --------
+    def export_video(self):
+        if self.cap is None: return
+        export_path = os.path.splitext(self.video_path)[0] + "_labeled.avi"
+        
+        w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = self.cap.get(cv2.CAP_PROP_FPS)
+        
+        fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        out = cv2.VideoWriter(export_path, fourcc, fps, (w, h))
+        
+        self.btn_export.setText("...Exporting...")
+        QApplication.processEvents()
+        
+        for i in range(self.total_frames):
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+            ret, frame = self.cap.read()
+            if not ret: break
+            
+            m_path = os.path.join(self.mask_folder, f"mask_{i:04d}.png")
+            if os.path.exists(m_path):
+                mask = cv2.imread(m_path, cv2.IMREAD_GRAYSCALE)
+                if mask is not None:
+                    overlay = frame.copy()
+                    overlay[mask > 0] = [0, 0, 255]
+                    frame = cv2.addWeighted(overlay, 0.4, frame, 0.6, 0)
+            
+            # Poly bounding box rendering
+            poly = self.get_active_arena_poly(i)
+            if poly:
+                p = np.array(poly, dtype=np.int32)
+                cv2.polylines(frame, [p], True, (0, 255, 0), 2)
+            
+            out.write(frame)
+            if i % 10 == 0:
+                self.lbl_frame_info.setText(f"Exporting: {i}/{self.total_frames}")
+                QApplication.processEvents()
+                
+        out.release()
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
+        self.read_frame()
+        self.update_display()
+        self.btn_export.setText("4. Export Final Video")
+        QMessageBox.information(self, "Export Complete", f"Successfully exported labeled video to:\n{export_path}")
+        
     # -------- Arena Definition --------
     def start_arena_definition(self):
         self.defining_arena = True
@@ -182,10 +231,8 @@ class VideoAnnotator(QWidget):
         sorted_frames = sorted(list(self.arena_history.keys()))
         active = None
         for f in sorted_frames:
-            if f <= frame_idx:
-                active = self.arena_history[f]
-            else:
-                break
+            if f <= frame_idx: active = self.arena_history[f]
+            else: break
         return active
         
     def save_arena_poly(self, poly, frame_idx):
@@ -212,7 +259,7 @@ class VideoAnnotator(QWidget):
             QMessageBox.information(self, "Success", "Baseline median computed successfully!")
         
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
-        self.btn_calc_baseline.setText("Baseline Ready")
+        self.btn_calc_baseline.setText("2. Calc Baseline")
         
     def auto_mask_frame(self, frame_img, frame_idx):
         if self.baseline_bgr is None: return None
@@ -222,7 +269,9 @@ class VideoAnnotator(QWidget):
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
         _, thresh = cv2.threshold(blur, self.spin_thresh.value(), 255, cv2.THRESH_BINARY)
         
-        # Apply arena polygon constraint
+        if self.chk_invert.isChecked():
+            thresh = cv2.bitwise_not(thresh)
+        
         poly = self.get_active_arena_poly(frame_idx)
         if poly:
             p = np.array(poly, dtype=np.int32)
@@ -366,13 +415,11 @@ class VideoAnnotator(QWidget):
         if self.frame_bgr is None: return
         overlay = self.frame_bgr.copy()
         
-        # Draw active arena as a green polygon
         poly = self.get_active_arena_poly(self.current_frame_idx)
         if poly is not None:
             p = np.array(poly, dtype=np.int32)
             cv2.polylines(overlay, [p], isClosed=True, color=(0, 255, 0), thickness=2)
             
-        # Draw interactive dots/lines when defining arena
         if self.defining_arena and len(self.arena_polygon_pts) > 0:
             pts = self.arena_polygon_pts
             for i in range(len(pts)):
@@ -382,7 +429,7 @@ class VideoAnnotator(QWidget):
             if len(pts) == 4:
                 cv2.line(overlay, (pts[-1][0], pts[-1][1]), (pts[0][0], pts[0][1]), (0, 255, 255), 2)
             
-        overlay[self.mask > 0] = [0, 0, 255] # Red mask
+        overlay[self.mask > 0] = [0, 0, 255]
         blended = cv2.addWeighted(overlay, 0.4, self.frame_bgr, 0.6, 0)
         
         rgb = cv2.cvtColor(blended, cv2.COLOR_BGR2RGB)
@@ -397,8 +444,7 @@ class VideoAnnotator(QWidget):
         self.update_display()
         
     def mouse_press(self, event):
-        if self.defining_arena:
-            pass # We handle logic on release for polygons
+        if self.defining_arena: pass
         elif event.button() == Qt.LeftButton:
             self.is_drawing = True
             self.draw_on_mask(event.pos())
