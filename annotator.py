@@ -13,7 +13,7 @@ from PyQt5.QtGui import QImage, QPixmap
 class VideoAnnotator(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Mouse Video Annotator (with Auto-Detect & Arena Bounds)")
+        self.setWindowTitle("Mouse Video Annotator (with Auto-Detect & Tilted Arena)")
         
         self.video_path = None
         self.cap = None
@@ -29,9 +29,8 @@ class VideoAnnotator(QWidget):
         self.is_drawing = False
         
         self.defining_arena = False
-        self.arena_start_pos = None
-        self.arena_current_pos = None
-        self.arena_history = {} # frame_idx (int) -> [x1, y1, x2, y2]
+        self.arena_polygon_pts = []
+        self.arena_history = {} # frame_idx (int) -> [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
         
         self.mask_folder = None
         self.stats_file = None
@@ -43,6 +42,7 @@ class VideoAnnotator(QWidget):
     def init_ui(self):
         v_layout = QVBoxLayout()
         
+        # --- Top Navigation ---
         h_nav = QHBoxLayout()
         self.btn_load = QPushButton("1. Load Video")
         self.btn_load.clicked.connect(self.load_video)
@@ -62,6 +62,7 @@ class VideoAnnotator(QWidget):
         h_nav.addWidget(self.btn_next)
         h_nav.addWidget(self.lbl_frame_info)
         
+        # --- Auto Subtraction Controls ---
         h_auto = QHBoxLayout()
         self.btn_calc_baseline = QPushButton("2. Calc Baseline (Median)")
         self.btn_calc_baseline.clicked.connect(self.calc_baseline)
@@ -83,6 +84,7 @@ class VideoAnnotator(QWidget):
         h_auto.addWidget(self.btn_auto_current)
         h_auto.addWidget(self.btn_auto_all)
 
+        # --- Manual Controls ---
         h_ctrl = QHBoxLayout()
         self.spin_brush = QSpinBox()
         self.spin_brush.setRange(1, 100)
@@ -99,7 +101,7 @@ class VideoAnnotator(QWidget):
         self.btn_interpolate = QPushButton("Interpolate Gap")
         self.btn_interpolate.clicked.connect(self.interpolate_gap)
         
-        self.btn_define_arena = QPushButton("3. Define Arena Box")
+        self.btn_define_arena = QPushButton("3. Define 4-Point Arena")
         self.btn_define_arena.setStyleSheet("background-color: #ffd966;")
         self.btn_define_arena.clicked.connect(self.start_arena_definition)
         
@@ -172,9 +174,10 @@ class VideoAnnotator(QWidget):
     # -------- Arena Definition --------
     def start_arena_definition(self):
         self.defining_arena = True
-        QMessageBox.information(self, "Define Arena", "Click and drag to draw a rectangle over the boundary of the arena. When you release, it will be saved for this and subsequent frames.")
+        self.arena_polygon_pts = []
+        QMessageBox.information(self, "Define Arena", "Click the 4 corners of your arena in order (e.g. top-left, top-right, bottom-right, bottom-left). It will automatically construct the tilted boundary when you click the 4th point.")
         
-    def get_active_arena_rect(self, frame_idx):
+    def get_active_arena_poly(self, frame_idx):
         if not self.arena_history: return None
         sorted_frames = sorted(list(self.arena_history.keys()))
         active = None
@@ -183,10 +186,10 @@ class VideoAnnotator(QWidget):
                 active = self.arena_history[f]
             else:
                 break
-        return active # [x1, y1, x2, y2]
+        return active
         
-    def save_arena_rect(self, rect, frame_idx):
-        self.arena_history[frame_idx] = rect
+    def save_arena_poly(self, poly, frame_idx):
+        self.arena_history[frame_idx] = poly
         with open(self.arena_file, "w") as f:
             json.dump(self.arena_history, f)
         self.update_display()
@@ -219,12 +222,12 @@ class VideoAnnotator(QWidget):
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
         _, thresh = cv2.threshold(blur, self.spin_thresh.value(), 255, cv2.THRESH_BINARY)
         
-        # Apply arena rectangular mask if one exists
-        rect = self.get_active_arena_rect(frame_idx)
-        if rect:
-            x1, y1, x2, y2 = rect
+        # Apply arena polygon constraint
+        poly = self.get_active_arena_poly(frame_idx)
+        if poly:
+            p = np.array(poly, dtype=np.int32)
             mask = np.zeros_like(thresh)
-            cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
+            cv2.fillPoly(mask, [p], 255)
             thresh = cv2.bitwise_and(thresh, mask)
         
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
@@ -363,17 +366,21 @@ class VideoAnnotator(QWidget):
         if self.frame_bgr is None: return
         overlay = self.frame_bgr.copy()
         
-        # Draw active arena as a green box
-        rect = self.get_active_arena_rect(self.current_frame_idx)
-        if rect:
-            x1, y1, x2, y2 = rect
-            cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        # Draw active arena as a green polygon
+        poly = self.get_active_arena_poly(self.current_frame_idx)
+        if poly is not None:
+            p = np.array(poly, dtype=np.int32)
+            cv2.polylines(overlay, [p], isClosed=True, color=(0, 255, 0), thickness=2)
             
-        # Draw active drag rectangle
-        if self.defining_arena and self.arena_start_pos and self.arena_current_pos:
-            x1, y1 = self.arena_start_pos.x(), self.arena_start_pos.y()
-            x2, y2 = self.arena_current_pos.x(), self.arena_current_pos.y()
-            cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 255, 255), 2)
+        # Draw interactive dots/lines when defining arena
+        if self.defining_arena and len(self.arena_polygon_pts) > 0:
+            pts = self.arena_polygon_pts
+            for i in range(len(pts)):
+                cv2.circle(overlay, (pts[i][0], pts[i][1]), 4, (0, 255, 255), -1)
+                if i > 0:
+                    cv2.line(overlay, (pts[i-1][0], pts[i-1][1]), (pts[i][0], pts[i][1]), (0, 255, 255), 2)
+            if len(pts) == 4:
+                cv2.line(overlay, (pts[-1][0], pts[-1][1]), (pts[0][0], pts[0][1]), (0, 255, 255), 2)
             
         overlay[self.mask > 0] = [0, 0, 255] # Red mask
         blended = cv2.addWeighted(overlay, 0.4, self.frame_bgr, 0.6, 0)
@@ -391,37 +398,27 @@ class VideoAnnotator(QWidget):
         
     def mouse_press(self, event):
         if self.defining_arena:
-            if event.button() == Qt.LeftButton:
-                self.arena_start_pos = event.pos()
-                self.arena_current_pos = event.pos()
+            pass # We handle logic on release for polygons
         elif event.button() == Qt.LeftButton:
             self.is_drawing = True
             self.draw_on_mask(event.pos())
             
     def mouse_move(self, event):
-        if self.defining_arena:
-            if self.arena_start_pos:
-                self.arena_current_pos = event.pos()
-                self.update_display()
-        elif self.is_drawing:
+        if self.is_drawing and not self.defining_arena:
             self.draw_on_mask(event.pos())
             
     def mouse_release(self, event):
         if self.defining_arena:
-            if event.button() == Qt.LeftButton and self.arena_start_pos and self.arena_current_pos:
-                x1 = min(self.arena_start_pos.x(), self.arena_current_pos.x())
-                y1 = min(self.arena_start_pos.y(), self.arena_current_pos.y())
-                x2 = max(self.arena_start_pos.x(), self.arena_current_pos.x())
-                y2 = max(self.arena_start_pos.y(), self.arena_current_pos.y())
+            if event.button() == Qt.LeftButton:
+                x, y = event.pos().x(), event.pos().y()
+                self.arena_polygon_pts.append([x, y])
                 
-                # Check for valid rect
-                if abs(x2 - x1) > 5 and abs(y2 - y1) > 5:
-                    self.save_arena_rect([x1, y1, x2, y2], self.current_frame_idx)
-                    QMessageBox.information(self, "Saved", f"Arena bounding box saved for frame {self.current_frame_idx} onwards!")
-                
-                self.defining_arena = False
-                self.arena_start_pos = None
-                self.arena_current_pos = None
+                if len(self.arena_polygon_pts) == 4:
+                    self.save_arena_poly(self.arena_polygon_pts, self.current_frame_idx)
+                    QMessageBox.information(self, "Saved", f"Tilted arena boundaries saved for frame {self.current_frame_idx} onwards!")
+                    self.defining_arena = False
+                    self.arena_polygon_pts = []
+                    
                 self.update_display()
         else:
             if event.button() == Qt.LeftButton:
