@@ -14,7 +14,7 @@ from PyQt5.QtGui import QImage, QPixmap
 # ----- Parallel Worker Logics ------
 
 def process_video_chunk_auto_mask(args):
-    video_path, start_f, end_f, baseline_bgr, spin_thresh_value, invert_checked, arena_history, mask_folder, keep_largest = args
+    video_path, start_f, end_f, baseline_bgr, spin_thresh_value, invert_checked, arena_history, mask_folder = args
     import cv2
     import numpy as np
     
@@ -51,13 +51,6 @@ def process_video_chunk_auto_mask(args):
             thresh = cv2.bitwise_and(thresh, mask)
             
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-        
-        if keep_largest:
-            contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if contours:
-                largest = max(contours, key=cv2.contourArea)
-                closed.fill(0)
-                cv2.drawContours(closed, [largest], -1, 255, -1)
         
         import os
         cv2.imwrite(os.path.join(mask_folder, f"mask_{i:04d}.png"), closed)
@@ -171,7 +164,6 @@ class VideoAnnotator(QWidget):
         self.btn_calc_baseline = QPushButton("Calc Baseline")
         self.btn_calc_baseline.clicked.connect(self.calc_baseline)
         self.btn_define_arena = QPushButton("Define 4-Point Arena")
-        self.btn_define_arena.setStyleSheet("background-color: #ffd966;")
         self.btn_define_arena.clicked.connect(self.start_arena_definition)
         l2.addWidget(self.btn_calc_baseline)
         l2.addWidget(self.btn_define_arena)
@@ -186,18 +178,13 @@ class VideoAnnotator(QWidget):
         self.spin_thresh.setValue(30)
         self.chk_invert = QCheckBox("Invert")
         
-        self.chk_largest = QCheckBox("Keep Largest Object Only (Ignore Poop)")
-        self.chk_largest.setChecked(True)
-        
         self.btn_auto_current = QPushButton("Auto Mask Current (Test)")
         self.btn_auto_current.clicked.connect(self.apply_auto_mask_current)
         self.btn_auto_all = QPushButton("Auto Mask ALL (Parallel)")
-        self.btn_auto_all.setStyleSheet("background-color: #6daee2;")
         self.btn_auto_all.clicked.connect(self.apply_auto_mask_all)
         l3.addWidget(QLabel("Thresh:"))
         l3.addWidget(self.spin_thresh)
         l3.addWidget(self.chk_invert)
-        l3.addWidget(self.chk_largest)
         l3.addWidget(self.btn_auto_current)
         l3.addWidget(self.btn_auto_all)
         l3.addStretch()
@@ -214,7 +201,6 @@ class VideoAnnotator(QWidget):
         self.chk_erase.stateChanged.connect(self.toggle_erase)
         
         self.btn_clean_all = QPushButton("Clean Artifacts (Parallel)")
-        self.btn_clean_all.setStyleSheet("background-color: #e06666; color: white;")
         self.btn_clean_all.clicked.connect(self.clean_all_artifacts)
         
         l4.addWidget(QLabel("Brush Size:"))
@@ -228,11 +214,9 @@ class VideoAnnotator(QWidget):
         gb5 = QGroupBox("Step 5: Final Output & Data Extraction")
         l5 = QHBoxLayout()
         self.btn_export_npy = QPushButton("Compile to Array (.npy)")
-        self.btn_export_npy.setStyleSheet("background-color: #8e7cc3; color: white; font-weight: bold;")
         self.btn_export_npy.clicked.connect(self.export_numpy)
         
         self.btn_export_avi = QPushButton("Render Labeled Video (.avi)")
-        self.btn_export_avi.setStyleSheet("background-color: #93c47d;")
         self.btn_export_avi.clicked.connect(self.export_video)
         
         l5.addWidget(self.btn_export_npy)
@@ -283,13 +267,10 @@ class VideoAnnotator(QWidget):
         
         self.lbl_pending_stim = QLabel("Pending:\n[Start: --]\n[End: --]")
         self.btn_stim_start = QPushButton("Mark START Here")
-        self.btn_stim_start.setStyleSheet("background-color: #fce5cd;")
         self.btn_stim_start.clicked.connect(self.mark_stim_start)
         self.btn_stim_end = QPushButton("Mark END Here")
-        self.btn_stim_end.setStyleSheet("background-color: #d9ead3;")
         self.btn_stim_end.clicked.connect(self.mark_stim_end)
         self.btn_stim_add = QPushButton("+ Add Stimulus to List")
-        self.btn_stim_add.setStyleSheet("font-weight: bold;")
         self.btn_stim_add.clicked.connect(self.save_stim_event)
         self.list_stimulus = QListWidget()
         self.btn_stim_del = QPushButton("- Remove Selected")
@@ -598,13 +579,6 @@ class VideoAnnotator(QWidget):
         
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-        
-        if self.chk_largest.isChecked():
-            contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if contours:
-                largest = max(contours, key=cv2.contourArea)
-                closed.fill(0)
-                cv2.drawContours(closed, [largest], -1, 255, -1)
                 
         return closed
         
@@ -637,7 +611,7 @@ class VideoAnnotator(QWidget):
         for i in range(self.analysis_start_frame, self.analysis_end_frame, chunk_size):
             chunks.append((self.video_path, i, min(self.analysis_end_frame, i + chunk_size), 
                            self.baseline_bgr, self.spin_thresh.value(), 
-                           self.chk_invert.isChecked(), self.arena_history, self.mask_folder, self.chk_largest.isChecked()))
+                           self.chk_invert.isChecked(), self.arena_history, self.mask_folder))
                            
         with multiprocessing.Pool(n_cpus) as pool:
             results = pool.map(process_video_chunk_auto_mask, chunks)

@@ -44,7 +44,6 @@ To ensure data integrity and prevent errors, the GUI layout enforces a strict 5-
 
 ### Step 3: Fast Mask Generation
 - **Settings**: Adjust your subtraction threshold size or engage **Invert Detection** (if the software extracts environmental backgrounds instead of subjects).
-- **Keep Largest Object Only**: Keep this checked so the compiler geometrically scans for the actual subject bounding-box area while inherently dismissing static poop/bedding anomalies!
 - **Auto Mask ALL (Parallel)**: Subdivides the video across all available system multiprocessing cores to generate boundary mapping instantaneously. 
 
 ### Step 4: Manual Correction
