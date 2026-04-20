@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import os
 import json
+import multiprocessing
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, 
     QFileDialog, QSlider, QSpinBox, QCheckBox, QMessageBox
@@ -10,10 +11,62 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QImage, QPixmap
 
+# ----- Parallel Worker Logic ------
+def process_video_chunk_auto_mask(args):
+    video_path, start_f, end_f, baseline_bgr, spin_thresh_value, invert_checked, arena_history, mask_folder = args
+    import cv2
+    import numpy as np
+    
+    cap = cv2.VideoCapture(video_path)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+    results = []
+    
+    for i in range(start_f, end_f):
+        ret, frame_img = cap.read()
+        if not ret: break
+        
+        diff = cv2.absdiff(frame_img, baseline_bgr)
+        gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        _, thresh = cv2.threshold(blur, spin_thresh_value, 255, cv2.THRESH_BINARY)
+        
+        if invert_checked:
+            thresh = cv2.bitwise_not(thresh)
+            
+        sorted_frames = sorted([int(k) for k in arena_history.keys()])
+        active = None
+        for f in sorted_frames:
+            if f <= i: active = arena_history[f]
+            else: break
+            
+        if active:
+            if len(active) == 4 and isinstance(active[0], (int, float)):
+                x1, y1, x2, y2 = active
+                active = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
+            p = np.array(active, dtype=np.int32).reshape((-1, 1, 2))
+            mask = np.zeros_like(thresh)
+            cv2.fillPoly(mask, [p], 255)
+            thresh = cv2.bitwise_and(thresh, mask)
+            
+        closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+        
+        import os
+        cv2.imwrite(os.path.join(mask_folder, f"mask_{i:04d}.png"), closed)
+        
+        is_painted = (closed > 0)
+        mean_val = np.mean(is_painted)
+        std_val = np.std(is_painted)
+        results.append({'Frame': i, 'Mean_Density': float(mean_val), 'Std_Density': float(std_val)})
+        
+    cap.release()
+    return results
+
+# ----- Main Application ------
 class VideoAnnotator(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Mouse Video Annotator (with Export & Invert)")
+        self.setWindowTitle("Mouse Video Annotator (Parallel Auto-Mask)")
         
         self.video_path = None
         self.cap = None
@@ -77,7 +130,7 @@ class VideoAnnotator(QWidget):
         
         self.btn_auto_current = QPushButton("Auto Mask Current")
         self.btn_auto_current.clicked.connect(self.apply_auto_mask_current)
-        self.btn_auto_all = QPushButton("Auto Mask ALL")
+        self.btn_auto_all = QPushButton("Auto Mask ALL (Parallel)")
         self.btn_auto_all.setStyleSheet("background-color: #6daee2;")
         self.btn_auto_all.clicked.connect(self.apply_auto_mask_all)
         
@@ -227,7 +280,7 @@ class VideoAnnotator(QWidget):
     def start_arena_definition(self):
         self.defining_arena = True
         self.arena_polygon_pts = []
-        QMessageBox.information(self, "Define Arena", "Click the 4 corners of your arena in order (e.g. top-left, top-right, bottom-right, bottom-left). It will automatically construct the tilted boundary when you click the 4th point.")
+        QMessageBox.information(self, "Define Arena", "Click the 4 corners of your arena in order (e.g. top-left, top-right, bottom-right, bottom-left).")
         
     def get_active_arena_poly(self, frame_idx):
         if not self.arena_history: return None
@@ -237,7 +290,6 @@ class VideoAnnotator(QWidget):
             if f <= frame_idx: active = self.arena_history[f]
             else: break
             
-        # Legacy support for [x1, y1, x2, y2]
         if active and len(active) == 4 and isinstance(active[0], (int, float)):
             x1, y1, x2, y2 = active
             active = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
@@ -307,26 +359,33 @@ class VideoAnnotator(QWidget):
             QMessageBox.warning(self, "Warning", "Please calculate baseline first!")
             return
             
-        reply = QMessageBox.question(self, "Confirm", "Process all frames? Existing masks will be overwritten.", QMessageBox.Yes | QMessageBox.No)
+        reply = QMessageBox.question(self, "Confirm", "Process all frames in Parallel? Existing masks will be overwritten.", QMessageBox.Yes | QMessageBox.No)
         if reply != QMessageBox.Yes: return
         
-        for i in range(self.total_frames):
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, i)
-            ret, fr = self.cap.read()
-            if ret:
-                m = self.auto_mask_frame(fr, i)
-                if m is not None:
-                    cv2.imwrite(os.path.join(self.mask_folder, f"mask_{i:04d}.png"), m)
-                    self.update_stats(i, m)
-                
-                if i % 10 == 0:
-                    self.lbl_frame_info.setText(f"Processing: {i}/{self.total_frames}")
-                    QApplication.processEvents()
-                    
+        self.btn_auto_all.setText("...Processing in Parallel...")
+        QApplication.processEvents()
+        
+        n_cpus = multiprocessing.cpu_count()
+        chunk_size = max(1, self.total_frames // (n_cpus * 2))
+        
+        chunks = []
+        for i in range(0, self.total_frames, chunk_size):
+            chunks.append((self.video_path, i, min(self.total_frames, i + chunk_size), 
+                           self.baseline_bgr, self.spin_thresh.value(), 
+                           self.chk_invert.isChecked(), self.arena_history, self.mask_folder))
+                           
+        with multiprocessing.Pool(n_cpus) as pool:
+            results = pool.map(process_video_chunk_auto_mask, chunks)
+            
+        # Combine all partial CSV chunks and rewrite the CSV safely
+        flat_results = [item for sublist in results for item in sublist]
+        pd.DataFrame(flat_results).sort_values(by='Frame').to_csv(self.stats_file, index=False)
+        
+        self.btn_auto_all.setText("Auto Mask ALL (Parallel)")
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
         self.read_frame()
         self.update_display()
-        QMessageBox.information(self, "Done", "All frames processed and saved!")
+        QMessageBox.information(self, "Done", f"All {self.total_frames} frames processed instantly across {n_cpus} CPUs!")
         
     # -------- Navigation & Core --------
     def prev_frame(self): self.slider.setValue(max(0, self.current_frame_idx - 1))
