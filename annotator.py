@@ -6,7 +6,7 @@ import json
 import multiprocessing
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, 
-    QFileDialog, QSlider, QSpinBox, QCheckBox, QMessageBox, QListWidget
+    QFileDialog, QSlider, QSpinBox, QCheckBox, QMessageBox, QListWidget, QGroupBox
 )
 from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QImage, QPixmap
@@ -66,7 +66,7 @@ def process_video_chunk_auto_mask(args):
 class VideoAnnotator(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Mouse Video Annotator (with Stimulus Tracking)")
+        self.setWindowTitle("Rodencity Analysis Pipeline")
         
         self.video_path = None
         self.cap = None
@@ -104,92 +104,120 @@ class VideoAnnotator(QWidget):
         main_h_layout = QHBoxLayout()
         v_layout = QVBoxLayout()
         
-        # --- Top Navigation ---
-        h_main_nav = QHBoxLayout()
-        self.btn_load = QPushButton("1. Load Video")
+        # --- UI Groups for Pipeline Order ---
+        
+        # Step 1: Load & Trim
+        gb1 = QGroupBox("Step 1: Video & Time Window")
+        l1 = QVBoxLayout()
+        
+        h1a = QHBoxLayout()
+        self.btn_load = QPushButton("Load Video")
         self.btn_load.clicked.connect(self.load_video)
-        
-        self.btn_prev = QPushButton("< Prev (A)")
-        self.btn_prev.clicked.connect(self.prev_frame)
-        self.slider = QSlider(Qt.Horizontal)
-        self.slider.setEnabled(False)
-        self.slider.valueChanged.connect(self.slider_moved)
-        self.btn_next = QPushButton("Next (D) >")
-        self.btn_next.clicked.connect(self.next_frame)
         self.lbl_frame_info = QLabel("Frame: 0/0")
+        h1a.addWidget(self.btn_load)
+        h1a.addWidget(self.lbl_frame_info)
+        h1a.addStretch()
         
-        h_main_nav.addWidget(self.btn_load)
-        h_main_nav.addWidget(self.btn_prev)
-        h_main_nav.addWidget(self.slider)
-        h_main_nav.addWidget(self.btn_next)
-        h_main_nav.addWidget(self.lbl_frame_info)
-        
-        # --- Analysis Window Trimming ---
-        h_trim = QHBoxLayout()
-        self.btn_set_start = QPushButton("[ Set Start Time ]")
+        h1b = QHBoxLayout()
+        self.btn_set_start = QPushButton("Set Start Time")
         self.btn_set_start.clicked.connect(self.set_start_frame)
-        self.btn_set_end = QPushButton("[ Set End Time ]")
+        self.btn_set_end = QPushButton("Set End Time")
         self.btn_set_end.clicked.connect(self.set_end_frame)
-        self.lbl_window = QLabel("Analysis Window: All")
+        self.lbl_window = QLabel("Window: All")
+        h1b.addWidget(self.btn_set_start)
+        h1b.addWidget(self.btn_set_end)
+        h1b.addWidget(self.lbl_window)
+        h1b.addStretch()
         
-        h_trim.addWidget(self.btn_set_start)
-        h_trim.addWidget(self.btn_set_end)
-        h_trim.addWidget(self.lbl_window)
-        h_trim.addStretch()
+        l1.addLayout(h1a)
+        l1.addLayout(h1b)
+        gb1.setLayout(l1)
         
-        # --- Auto Subtraction Controls ---
-        h_auto = QHBoxLayout()
-        self.btn_calc_baseline = QPushButton("2. Calc Baseline")
+        # Step 2: Environment Constraint
+        gb2 = QGroupBox("Step 2: Environment Constraint")
+        l2 = QHBoxLayout()
+        self.btn_calc_baseline = QPushButton("Calc Baseline")
         self.btn_calc_baseline.clicked.connect(self.calc_baseline)
+        self.btn_define_arena = QPushButton("Define 4-Point Arena")
+        self.btn_define_arena.setStyleSheet("background-color: #ffd966;")
+        self.btn_define_arena.clicked.connect(self.start_arena_definition)
+        l2.addWidget(self.btn_calc_baseline)
+        l2.addWidget(self.btn_define_arena)
+        l2.addStretch()
+        gb2.setLayout(l2)
         
+        # Step 3: Create Masks
+        gb3 = QGroupBox("Step 3: Mask Generation")
+        l3 = QHBoxLayout()
         self.spin_thresh = QSpinBox()
         self.spin_thresh.setRange(1, 255)
         self.spin_thresh.setValue(30)
-        self.spin_thresh.setToolTip("Lower = picks up faint things. Higher = blocks shadow.")
-        
-        self.chk_invert = QCheckBox("Invert Detection")
-        self.chk_invert.setToolTip("If the floor becomes detected instead of the mice, check this.")
-        
-        self.btn_auto_current = QPushButton("Auto Mask Current")
+        self.chk_invert = QCheckBox("Invert")
+        self.btn_auto_current = QPushButton("Auto Mask Current (Test)")
         self.btn_auto_current.clicked.connect(self.apply_auto_mask_current)
         self.btn_auto_all = QPushButton("Auto Mask ALL (Parallel)")
         self.btn_auto_all.setStyleSheet("background-color: #6daee2;")
         self.btn_auto_all.clicked.connect(self.apply_auto_mask_all)
+        l3.addWidget(QLabel("Thresh:"))
+        l3.addWidget(self.spin_thresh)
+        l3.addWidget(self.chk_invert)
+        l3.addWidget(self.btn_auto_current)
+        l3.addWidget(self.btn_auto_all)
+        l3.addStretch()
+        gb3.setLayout(l3)
         
-        h_auto.addWidget(self.btn_calc_baseline)
-        h_auto.addWidget(QLabel("Thresh:"))
-        h_auto.addWidget(self.spin_thresh)
-        h_auto.addWidget(self.chk_invert)
-        h_auto.addWidget(self.btn_auto_current)
-        h_auto.addWidget(self.btn_auto_all)
-
-        # --- Manual Controls ---
-        h_ctrl = QHBoxLayout()
+        # Step 4: Manual Review
+        gb4 = QGroupBox("Step 4: Manual Checking & Interpolation")
+        l4 = QHBoxLayout()
         self.spin_brush = QSpinBox()
         self.spin_brush.setRange(1, 100)
         self.spin_brush.setValue(self.brush_size)
         self.spin_brush.valueChanged.connect(self.change_brush)
-        
-        self.chk_erase = QCheckBox("Erase Mode")
+        self.chk_erase = QCheckBox("Erase Mode (E / W)")
         self.chk_erase.stateChanged.connect(self.toggle_erase)
-        
         self.btn_interpolate = QPushButton("Interpolate Gap")
         self.btn_interpolate.clicked.connect(self.interpolate_gap)
+        l4.addWidget(QLabel("Brush Size:"))
+        l4.addWidget(self.spin_brush)
+        l4.addWidget(self.chk_erase)
+        l4.addWidget(self.btn_interpolate)
+        l4.addStretch()
+        gb4.setLayout(l4)
         
-        self.btn_define_arena = QPushButton("3. Define 4-Point Arena")
-        self.btn_define_arena.setStyleSheet("background-color: #ffd966;")
-        self.btn_define_arena.clicked.connect(self.start_arena_definition)
-        
-        self.btn_export = QPushButton("4. Export Final Video")
+        # Step 5: Export
+        gb5 = QGroupBox("Step 5: Export")
+        l5 = QHBoxLayout()
+        self.btn_export = QPushButton("Export Final Labeled Video")
         self.btn_export.setStyleSheet("background-color: #93c47d;")
         self.btn_export.clicked.connect(self.export_video)
+        l5.addWidget(self.btn_export)
+        l5.addStretch()
+        gb5.setLayout(l5)
         
-        h_ctrl.addWidget(QLabel("Brush Size:"))
-        h_ctrl.addWidget(self.spin_brush)
-        h_ctrl.addWidget(self.chk_erase)
-        h_ctrl.addWidget(self.btn_interpolate)
-        h_ctrl.addWidget(self.btn_define_arena)
-        h_ctrl.addWidget(self.btn_export)
+        h_all_steps = QHBoxLayout()
+        v_steps_left = QVBoxLayout()
+        v_steps_left.addWidget(gb1)
+        v_steps_left.addWidget(gb3)
+        v_steps_right = QVBoxLayout()
+        v_steps_right.addWidget(gb2)
+        v_steps_right.addWidget(gb4)
+        h_all_steps.addLayout(v_steps_left)
+        h_all_steps.addLayout(v_steps_right)
+        
+        # Slider is below image
+        h_slider = QHBoxLayout()
+        self.btn_prev = QPushButton("<")
+        self.btn_prev.setFixedWidth(30)
+        self.btn_prev.clicked.connect(self.prev_frame)
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setEnabled(False)
+        self.slider.valueChanged.connect(self.slider_moved)
+        self.btn_next = QPushButton(">")
+        self.btn_next.setFixedWidth(30)
+        self.btn_next.clicked.connect(self.next_frame)
+        h_slider.addWidget(self.btn_prev)
+        h_slider.addWidget(self.slider)
+        h_slider.addWidget(self.btn_next)
         
         self.lbl_image = QLabel()
         self.lbl_image.setAlignment(Qt.AlignCenter)
@@ -198,30 +226,25 @@ class VideoAnnotator(QWidget):
         self.lbl_image.mouseMoveEvent = self.mouse_move
         self.lbl_image.mouseReleaseEvent = self.mouse_release
         
-        v_layout.addWidget(self.lbl_image)
-        v_layout.addLayout(h_main_nav)
-        v_layout.addLayout(h_trim)
-        v_layout.addLayout(h_auto)
-        v_layout.addLayout(h_ctrl)
+        v_layout.addWidget(self.lbl_image, stretch=1)
+        v_layout.addLayout(h_slider)
+        v_layout.addLayout(h_all_steps)
+        v_layout.addWidget(gb5)
         
         # --- Right Panel: Stimulus Marking ---
         v_right = QVBoxLayout()
         v_right.addWidget(QLabel("<b>Stimulus Marking</b>"))
         
         self.lbl_pending_stim = QLabel("Pending:\n[Start: --]\n[End: --]")
-        
         self.btn_stim_start = QPushButton("Mark START Here")
         self.btn_stim_start.setStyleSheet("background-color: #fce5cd;")
         self.btn_stim_start.clicked.connect(self.mark_stim_start)
-        
         self.btn_stim_end = QPushButton("Mark END Here")
         self.btn_stim_end.setStyleSheet("background-color: #d9ead3;")
         self.btn_stim_end.clicked.connect(self.mark_stim_end)
-        
         self.btn_stim_add = QPushButton("+ Add Stimulus to List")
         self.btn_stim_add.setStyleSheet("font-weight: bold;")
         self.btn_stim_add.clicked.connect(self.save_stim_event)
-        
         self.list_stimulus = QListWidget()
         self.btn_stim_del = QPushButton("- Remove Selected")
         self.btn_stim_del.clicked.connect(self.del_stim_event)
@@ -236,6 +259,13 @@ class VideoAnnotator(QWidget):
         main_h_layout.addLayout(v_layout, stretch=4)
         main_h_layout.addLayout(v_right, stretch=1)
         self.setLayout(main_h_layout)
+        
+        # Disable buttons until video is loaded
+        for btn in [self.btn_set_start, self.btn_set_end, self.btn_calc_baseline, 
+                    self.btn_define_arena, self.btn_auto_current, self.btn_auto_all,
+                    self.btn_interpolate, self.btn_export,
+                    self.btn_stim_start, self.btn_stim_end, self.btn_stim_add, self.btn_stim_del]:
+            btn.setEnabled(False)
         
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_A:
@@ -269,7 +299,7 @@ class VideoAnnotator(QWidget):
         
         self.analysis_start_frame = 0
         self.analysis_end_frame = self.total_frames
-        self.lbl_window.setText(f"Analysis Window: 0 -> {self.total_frames}")
+        self.lbl_window.setText(f"Window: 0 -> {self.total_frames}")
         
         video_name = os.path.splitext(os.path.basename(self.video_path))[0]
         self.mask_folder = os.path.join(os.path.dirname(self.video_path), f"{video_name}_masks")
@@ -292,6 +322,13 @@ class VideoAnnotator(QWidget):
             df = pd.read_csv(self.stim_file)
             self.stimulus_events = df.to_dict('records')
         self.refresh_stim_list()
+            
+        # Re-enable all step buttons
+        for btn in [self.btn_set_start, self.btn_set_end, self.btn_calc_baseline, 
+                    self.btn_define_arena, self.btn_auto_current, self.btn_auto_all,
+                    self.btn_interpolate, self.btn_export,
+                    self.btn_stim_start, self.btn_stim_end, self.btn_stim_add, self.btn_stim_del]:
+            btn.setEnabled(True)
             
         self.read_frame()
         self.update_display()
@@ -347,12 +384,12 @@ class VideoAnnotator(QWidget):
     # -------- Analysis Window --------
     def set_start_frame(self):
         self.analysis_start_frame = self.current_frame_idx
-        self.lbl_window.setText(f"Analysis Window: {self.analysis_start_frame} -> {self.analysis_end_frame}")
+        self.lbl_window.setText(f"Window: {self.analysis_start_frame} -> {self.analysis_end_frame}")
         QMessageBox.information(self, "Start Time Set", f"Analysis start boundary set to frame {self.analysis_start_frame}.")
         
     def set_end_frame(self):
         self.analysis_end_frame = self.current_frame_idx
-        self.lbl_window.setText(f"Analysis Window: {self.analysis_start_frame} -> {self.analysis_end_frame}")
+        self.lbl_window.setText(f"Window: {self.analysis_start_frame} -> {self.analysis_end_frame}")
         QMessageBox.information(self, "End Time Set", f"Analysis end boundary set to frame {self.analysis_end_frame}.")
         
     # -------- EXPORT VIDEO --------
@@ -397,7 +434,7 @@ class VideoAnnotator(QWidget):
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
         self.read_frame()
         self.update_display()
-        self.btn_export.setText("4. Export Final Video")
+        self.btn_export.setText("Export Final Labeled Video")
         QMessageBox.information(self, "Export Complete", f"Successfully exported labeled video to:\n{export_path}")
         
     # -------- Arena Definition --------
@@ -444,7 +481,7 @@ class VideoAnnotator(QWidget):
             QMessageBox.information(self, "Success", "Baseline median computed successfully!")
         
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
-        self.btn_calc_baseline.setText("2. Calc Baseline")
+        self.btn_calc_baseline.setText("Calc Baseline")
         
     def auto_mask_frame(self, frame_img, frame_idx):
         if self.baseline_bgr is None: return None
