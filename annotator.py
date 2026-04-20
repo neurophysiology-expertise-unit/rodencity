@@ -6,7 +6,7 @@ import json
 import multiprocessing
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, 
-    QFileDialog, QSlider, QSpinBox, QCheckBox, QMessageBox
+    QFileDialog, QSlider, QSpinBox, QCheckBox, QMessageBox, QListWidget
 )
 from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QImage, QPixmap
@@ -66,7 +66,7 @@ def process_video_chunk_auto_mask(args):
 class VideoAnnotator(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Mouse Video Annotator (Parallel Auto-Mask)")
+        self.setWindowTitle("Mouse Video Annotator (with Stimulus Tracking)")
         
         self.video_path = None
         self.cap = None
@@ -88,14 +88,20 @@ class VideoAnnotator(QWidget):
         self.arena_polygon_pts = []
         self.arena_history = {}
         
+        self.pending_stim_start = None
+        self.pending_stim_end = None
+        self.stimulus_events = []
+        
         self.mask_folder = None
         self.stats_file = None
         self.arena_file = None
+        self.stim_file = None
         
         self.setFocusPolicy(Qt.StrongFocus)
         self.init_ui()
         
     def init_ui(self):
+        main_h_layout = QHBoxLayout()
         v_layout = QVBoxLayout()
         
         # --- Top Navigation ---
@@ -198,7 +204,38 @@ class VideoAnnotator(QWidget):
         v_layout.addLayout(h_auto)
         v_layout.addLayout(h_ctrl)
         
-        self.setLayout(v_layout)
+        # --- Right Panel: Stimulus Marking ---
+        v_right = QVBoxLayout()
+        v_right.addWidget(QLabel("<b>Stimulus Marking</b>"))
+        
+        self.lbl_pending_stim = QLabel("Pending:\n[Start: --]\n[End: --]")
+        
+        self.btn_stim_start = QPushButton("Mark START Here")
+        self.btn_stim_start.setStyleSheet("background-color: #fce5cd;")
+        self.btn_stim_start.clicked.connect(self.mark_stim_start)
+        
+        self.btn_stim_end = QPushButton("Mark END Here")
+        self.btn_stim_end.setStyleSheet("background-color: #d9ead3;")
+        self.btn_stim_end.clicked.connect(self.mark_stim_end)
+        
+        self.btn_stim_add = QPushButton("+ Add Stimulus to List")
+        self.btn_stim_add.setStyleSheet("font-weight: bold;")
+        self.btn_stim_add.clicked.connect(self.save_stim_event)
+        
+        self.list_stimulus = QListWidget()
+        self.btn_stim_del = QPushButton("- Remove Selected")
+        self.btn_stim_del.clicked.connect(self.del_stim_event)
+        
+        v_right.addWidget(self.lbl_pending_stim)
+        v_right.addWidget(self.btn_stim_start)
+        v_right.addWidget(self.btn_stim_end)
+        v_right.addWidget(self.btn_stim_add)
+        v_right.addWidget(self.list_stimulus)
+        v_right.addWidget(self.btn_stim_del)
+        
+        main_h_layout.addLayout(v_layout, stretch=4)
+        main_h_layout.addLayout(v_right, stretch=1)
+        self.setLayout(main_h_layout)
         
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_A:
@@ -241,6 +278,7 @@ class VideoAnnotator(QWidget):
             
         self.stats_file = os.path.join(self.mask_folder, "density_stats.csv")
         self.arena_file = os.path.join(self.mask_folder, "arena_bounds.json")
+        self.stim_file = os.path.join(self.mask_folder, "stimulus_events.csv")
         
         if os.path.exists(self.arena_file):
             with open(self.arena_file, "r") as f:
@@ -249,9 +287,63 @@ class VideoAnnotator(QWidget):
         else:
             self.arena_history = {}
             
+        self.stimulus_events = []
+        if os.path.exists(self.stim_file):
+            df = pd.read_csv(self.stim_file)
+            self.stimulus_events = df.to_dict('records')
+        self.refresh_stim_list()
+            
         self.read_frame()
         self.update_display()
         
+    # -------- Stimulus Tracking --------
+    def mark_stim_start(self):
+        self.pending_stim_start = self.current_frame_idx
+        self.update_stim_label()
+        
+    def mark_stim_end(self):
+        self.pending_stim_end = self.current_frame_idx
+        self.update_stim_label()
+        
+    def update_stim_label(self):
+        s = self.pending_stim_start if self.pending_stim_start is not None else "--"
+        e = self.pending_stim_end if self.pending_stim_end is not None else "--"
+        self.lbl_pending_stim.setText(f"Pending:\n[Start: {s}]\n[End: {e}]")
+        
+    def save_stim_event(self):
+        if self.pending_stim_start is None or self.pending_stim_end is None:
+            QMessageBox.warning(self, "Incomplete", "Please mark both Start and End frames first!")
+            return
+        if self.pending_stim_end < self.pending_stim_start:
+            QMessageBox.warning(self, "Invalid", "End frame must be after or equal to Start frame.")
+            return
+            
+        dur = self.pending_stim_end - self.pending_stim_start
+        self.stimulus_events.append({'Start': self.pending_stim_start, 'End': self.pending_stim_end, 'Duration': dur})
+        
+        self.pending_stim_start = None
+        self.pending_stim_end = None
+        self.update_stim_label()
+        
+        self.refresh_stim_list()
+        self.write_stim_csv()
+        
+    def del_stim_event(self):
+        row = self.list_stimulus.currentRow()
+        if row < 0 or row >= len(self.stimulus_events): return
+        self.stimulus_events.pop(row)
+        self.refresh_stim_list()
+        self.write_stim_csv()
+        
+    def refresh_stim_list(self):
+        self.list_stimulus.clear()
+        for i, ev in enumerate(self.stimulus_events):
+            self.list_stimulus.addItem(f"Evt {i+1}: F{ev['Start']} -> F{ev['End']} ({ev['Duration']} frames)")
+            
+    def write_stim_csv(self):
+        if not self.stim_file: return
+        pd.DataFrame(self.stimulus_events).to_csv(self.stim_file, index=False)
+
     # -------- Analysis Window --------
     def set_start_frame(self):
         self.analysis_start_frame = self.current_frame_idx
@@ -410,7 +502,6 @@ class VideoAnnotator(QWidget):
         with multiprocessing.Pool(n_cpus) as pool:
             results = pool.map(process_video_chunk_auto_mask, chunks)
             
-        # Combine all partial CSV chunks and rewrite the CSV safely
         flat_results = [item for sublist in results for item in sublist]
         pd.DataFrame(flat_results).sort_values(by='Frame').to_csv(self.stats_file, index=False)
         
