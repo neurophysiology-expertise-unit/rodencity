@@ -4,8 +4,11 @@ A simple PyQt5-based desktop application to load `.avi` videos and manually anno
 Annotations are saved as individual mask images and summarized in a density CSV file.
 
 ## Requirements
-Make sure you have a python environment (e.g., Anaconda) and install the requirements:
+Make sure you have a python environment (e.g., Anaconda). We recommend creating a new environment using **Python 3.10** (which has been tested and verified to work perfectly):
+
 ```bash
+conda create -n rodencity python=3.10 -y
+conda activate rodencity
 pip install -r requirements.txt
 ```
 
