@@ -1,4 +1,6 @@
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')  # Headless mode to prevent QT UI crashes
 import matplotlib.pyplot as plt
 import argparse
 import sys
