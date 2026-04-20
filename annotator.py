@@ -2,17 +2,18 @@ import cv2
 import numpy as np
 import pandas as pd
 import os
+import json
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, 
     QFileDialog, QSlider, QSpinBox, QCheckBox, QMessageBox
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QImage, QPixmap
 
 class VideoAnnotator(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Mouse Video Annotator (with Auto-Detect & Arena Boundary)")
+        self.setWindowTitle("Mouse Video Annotator (with Auto-Detect & Arena Bounds)")
         
         self.video_path = None
         self.cap = None
@@ -27,8 +28,14 @@ class VideoAnnotator(QWidget):
         self.is_erasing = False
         self.is_drawing = False
         
+        self.defining_arena = False
+        self.arena_start_pos = None
+        self.arena_current_pos = None
+        self.arena_history = {} # frame_idx (int) -> [x1, y1, x2, y2]
+        
         self.mask_folder = None
         self.stats_file = None
+        self.arena_file = None
         
         self.setFocusPolicy(Qt.StrongFocus)
         self.init_ui()
@@ -36,7 +43,6 @@ class VideoAnnotator(QWidget):
     def init_ui(self):
         v_layout = QVBoxLayout()
         
-        # --- Top Navigation ---
         h_nav = QHBoxLayout()
         self.btn_load = QPushButton("1. Load Video")
         self.btn_load.clicked.connect(self.load_video)
@@ -56,7 +62,6 @@ class VideoAnnotator(QWidget):
         h_nav.addWidget(self.btn_next)
         h_nav.addWidget(self.lbl_frame_info)
         
-        # --- Auto Subtraction Controls ---
         h_auto = QHBoxLayout()
         self.btn_calc_baseline = QPushButton("2. Calc Baseline (Median)")
         self.btn_calc_baseline.clicked.connect(self.calc_baseline)
@@ -68,7 +73,6 @@ class VideoAnnotator(QWidget):
         
         self.btn_auto_current = QPushButton("Auto Mask Current")
         self.btn_auto_current.clicked.connect(self.apply_auto_mask_current)
-        
         self.btn_auto_all = QPushButton("Auto Mask ALL")
         self.btn_auto_all.setStyleSheet("background-color: #6daee2;")
         self.btn_auto_all.clicked.connect(self.apply_auto_mask_all)
@@ -79,7 +83,6 @@ class VideoAnnotator(QWidget):
         h_auto.addWidget(self.btn_auto_current)
         h_auto.addWidget(self.btn_auto_all)
 
-        # --- Manual Controls ---
         h_ctrl = QHBoxLayout()
         self.spin_brush = QSpinBox()
         self.spin_brush.setRange(1, 100)
@@ -96,17 +99,17 @@ class VideoAnnotator(QWidget):
         self.btn_interpolate = QPushButton("Interpolate Gap")
         self.btn_interpolate.clicked.connect(self.interpolate_gap)
         
-        self.btn_save_arena = QPushButton("Save Mask as Arena")
-        self.btn_save_arena.setStyleSheet("background-color: #ffd966;")
-        self.btn_save_arena.clicked.connect(self.save_arena)
+        self.btn_define_arena = QPushButton("3. Define Arena Box")
+        self.btn_define_arena.setStyleSheet("background-color: #ffd966;")
+        self.btn_define_arena.clicked.connect(self.start_arena_definition)
         
         h_ctrl.addWidget(QLabel("Brush Size:"))
         h_ctrl.addWidget(self.spin_brush)
         h_ctrl.addWidget(self.chk_erase)
         h_ctrl.addWidget(self.btn_clear)
         h_ctrl.addWidget(self.btn_interpolate)
+        h_ctrl.addWidget(self.btn_define_arena)
         h_ctrl.addWidget(self.btn_save)
-        h_ctrl.addWidget(self.btn_save_arena)
         
         self.lbl_image = QLabel()
         self.lbl_image.setAlignment(Qt.AlignCenter)
@@ -154,7 +157,38 @@ class VideoAnnotator(QWidget):
             os.makedirs(self.mask_folder)
             
         self.stats_file = os.path.join(self.mask_folder, "density_stats.csv")
+        self.arena_file = os.path.join(self.mask_folder, "arena_bounds.json")
+        
+        if os.path.exists(self.arena_file):
+            with open(self.arena_file, "r") as f:
+                data = json.load(f)
+                self.arena_history = {int(k): v for k, v in data.items()}
+        else:
+            self.arena_history = {}
+            
         self.read_frame()
+        self.update_display()
+        
+    # -------- Arena Definition --------
+    def start_arena_definition(self):
+        self.defining_arena = True
+        QMessageBox.information(self, "Define Arena", "Click and drag to draw a rectangle over the boundary of the arena. When you release, it will be saved for this and subsequent frames.")
+        
+    def get_active_arena_rect(self, frame_idx):
+        if not self.arena_history: return None
+        sorted_frames = sorted(list(self.arena_history.keys()))
+        active = None
+        for f in sorted_frames:
+            if f <= frame_idx:
+                active = self.arena_history[f]
+            else:
+                break
+        return active # [x1, y1, x2, y2]
+        
+    def save_arena_rect(self, rect, frame_idx):
+        self.arena_history[frame_idx] = rect
+        with open(self.arena_file, "w") as f:
+            json.dump(self.arena_history, f)
         self.update_display()
         
     # -------- Auto Background Subtraction --------
@@ -164,7 +198,7 @@ class VideoAnnotator(QWidget):
         QApplication.processEvents()
         
         frames = []
-        step = max(1, self.total_frames // 30) # sample 30 frames
+        step = max(1, self.total_frames // 30)
         for i in range(0, self.total_frames, step):
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, i)
             ret, fr = self.cap.read()
@@ -177,23 +211,6 @@ class VideoAnnotator(QWidget):
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
         self.btn_calc_baseline.setText("Baseline Ready")
         
-    def get_active_arena(self, frame_idx):
-        active_idx = -1
-        for i in range(frame_idx, -1, -1):
-            if os.path.exists(os.path.join(self.mask_folder, f"arena_{i:04d}.png")):
-                active_idx = i
-                break
-        if active_idx != -1:
-            return cv2.imread(os.path.join(self.mask_folder, f"arena_{active_idx:04d}.png"), cv2.IMREAD_GRAYSCALE)
-        return None
-
-    def save_arena(self):
-        if self.mask is None: return
-        arena_path = os.path.join(self.mask_folder, f"arena_{self.current_frame_idx:04d}.png")
-        cv2.imwrite(arena_path, self.mask)
-        self.clear_mask()
-        QMessageBox.information(self, "Saved", f"Arena area saved!\n\nThis boundary will restrict Auto-Masking from frame {self.current_frame_idx} onward. The drawing layer has been cleared for you to track mice.")
-        
     def auto_mask_frame(self, frame_img, frame_idx):
         if self.baseline_bgr is None: return None
         
@@ -202,12 +219,14 @@ class VideoAnnotator(QWidget):
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
         _, thresh = cv2.threshold(blur, self.spin_thresh.value(), 255, cv2.THRESH_BINARY)
         
-        # Apply arena mask to crop out false positives outside the arena
-        arena = self.get_active_arena(frame_idx)
-        if arena is not None:
-             thresh = cv2.bitwise_and(thresh, thresh, mask=(arena > 0).astype(np.uint8)*255)
-             
-        # morphological closing
+        # Apply arena rectangular mask if one exists
+        rect = self.get_active_arena_rect(frame_idx)
+        if rect:
+            x1, y1, x2, y2 = rect
+            mask = np.zeros_like(thresh)
+            cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
+            thresh = cv2.bitwise_and(thresh, mask)
+        
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         return closed
@@ -248,7 +267,7 @@ class VideoAnnotator(QWidget):
         self.update_display()
         QMessageBox.information(self, "Done", "All frames processed and saved!")
         
-    # -------- Navigation --------
+    # -------- Navigation & Core --------
     def prev_frame(self): self.slider.setValue(max(0, self.current_frame_idx - 1))
     def next_frame(self): self.slider.setValue(min(self.total_frames - 1, self.current_frame_idx + 1))
         
@@ -280,7 +299,7 @@ class VideoAnnotator(QWidget):
         self.lbl_frame_info.setText(f"Frame: {self.current_frame_idx}/{self.total_frames - 1}")
         if was_superimposed: self.save_current_mask()
         
-    # -------- Utilities --------
+    # -------- Utils & IO --------
     def clear_mask(self):
         if self.mask is not None:
             self.mask.fill(0)
@@ -343,7 +362,20 @@ class VideoAnnotator(QWidget):
     def update_display(self):
         if self.frame_bgr is None: return
         overlay = self.frame_bgr.copy()
-        overlay[self.mask > 0] = [0, 0, 255]
+        
+        # Draw active arena as a green box
+        rect = self.get_active_arena_rect(self.current_frame_idx)
+        if rect:
+            x1, y1, x2, y2 = rect
+            cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            
+        # Draw active drag rectangle
+        if self.defining_arena and self.arena_start_pos and self.arena_current_pos:
+            x1, y1 = self.arena_start_pos.x(), self.arena_start_pos.y()
+            x2, y2 = self.arena_current_pos.x(), self.arena_current_pos.y()
+            cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 255, 255), 2)
+            
+        overlay[self.mask > 0] = [0, 0, 255] # Red mask
         blended = cv2.addWeighted(overlay, 0.4, self.frame_bgr, 0.6, 0)
         
         rgb = cv2.cvtColor(blended, cv2.COLOR_BGR2RGB)
@@ -351,18 +383,47 @@ class VideoAnnotator(QWidget):
         qimg = QImage(rgb.data, w, h, ch*w, QImage.Format_RGB888)
         self.lbl_image.setPixmap(QPixmap.fromImage(qimg))
         
+    # -------- Mouse Interactions --------
     def draw_on_mask(self, pos):
         if self.mask is None or self.frame_bgr is None: return
         cv2.circle(self.mask, (pos.x(), pos.y()), self.brush_size, 0 if self.is_erasing else 255, -1)
         self.update_display()
         
     def mouse_press(self, event):
-        if event.button() == Qt.LeftButton:
+        if self.defining_arena:
+            if event.button() == Qt.LeftButton:
+                self.arena_start_pos = event.pos()
+                self.arena_current_pos = event.pos()
+        elif event.button() == Qt.LeftButton:
             self.is_drawing = True
             self.draw_on_mask(event.pos())
+            
     def mouse_move(self, event):
-        if self.is_drawing: self.draw_on_mask(event.pos())
+        if self.defining_arena:
+            if self.arena_start_pos:
+                self.arena_current_pos = event.pos()
+                self.update_display()
+        elif self.is_drawing:
+            self.draw_on_mask(event.pos())
+            
     def mouse_release(self, event):
-        if event.button() == Qt.LeftButton:
-            self.is_drawing = False
-            self.save_current_mask()
+        if self.defining_arena:
+            if event.button() == Qt.LeftButton and self.arena_start_pos and self.arena_current_pos:
+                x1 = min(self.arena_start_pos.x(), self.arena_current_pos.x())
+                y1 = min(self.arena_start_pos.y(), self.arena_current_pos.y())
+                x2 = max(self.arena_start_pos.x(), self.arena_current_pos.x())
+                y2 = max(self.arena_start_pos.y(), self.arena_current_pos.y())
+                
+                # Check for valid rect
+                if abs(x2 - x1) > 5 and abs(y2 - y1) > 5:
+                    self.save_arena_rect([x1, y1, x2, y2], self.current_frame_idx)
+                    QMessageBox.information(self, "Saved", f"Arena bounding box saved for frame {self.current_frame_idx} onwards!")
+                
+                self.defining_arena = False
+                self.arena_start_pos = None
+                self.arena_current_pos = None
+                self.update_display()
+        else:
+            if event.button() == Qt.LeftButton:
+                self.is_drawing = False
+                self.save_current_mask()
