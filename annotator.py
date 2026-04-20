@@ -11,7 +11,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QImage, QPixmap
 
-# ----- Parallel Worker Logic ------
+# ----- Parallel Worker Logics ------
+
 def process_video_chunk_auto_mask(args):
     video_path, start_f, end_f, baseline_bgr, spin_thresh_value, invert_checked, arena_history, mask_folder, keep_largest = args
     import cv2
@@ -68,6 +69,32 @@ def process_video_chunk_auto_mask(args):
         
     cap.release()
     return results
+
+def process_video_chunk_clean_artifacts(args):
+    start_f, end_f, mask_folder = args
+    import cv2
+    import numpy as np
+    import os
+    results = []
+    
+    for i in range(start_f, end_f):
+        m_path = os.path.join(mask_folder, f"mask_{i:04d}.png")
+        if os.path.exists(m_path):
+            mask = cv2.imread(m_path, cv2.IMREAD_GRAYSCALE)
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                largest = max(contours, key=cv2.contourArea)
+                mask.fill(0)
+                cv2.drawContours(mask, [largest], -1, 255, -1)
+                cv2.imwrite(m_path, mask)
+                
+            is_painted = (mask > 0)
+            mean_val = np.mean(is_painted)
+            std_val = np.std(is_painted)
+            results.append({'Frame': i, 'Mean_Density': float(mean_val), 'Std_Density': float(std_val)})
+            
+    return results
+
 
 # ----- Main Application ------
 class VideoAnnotator(QWidget):
@@ -177,7 +204,7 @@ class VideoAnnotator(QWidget):
         gb3.setLayout(l3)
         
         # Step 4: Manual Review
-        gb4 = QGroupBox("Step 4: Manual Checking")
+        gb4 = QGroupBox("Step 4: Manual Checking & Post-process")
         l4 = QHBoxLayout()
         self.spin_brush = QSpinBox()
         self.spin_brush.setRange(1, 100)
@@ -186,7 +213,7 @@ class VideoAnnotator(QWidget):
         self.chk_erase = QCheckBox("Erase Mode (E / W)")
         self.chk_erase.stateChanged.connect(self.toggle_erase)
         
-        self.btn_clean_all = QPushButton("Clean Artifacts (All Frames)")
+        self.btn_clean_all = QPushButton("Clean Artifacts (Parallel)")
         self.btn_clean_all.setStyleSheet("background-color: #e06666; color: white;")
         self.btn_clean_all.clicked.connect(self.clean_all_artifacts)
         
@@ -514,7 +541,24 @@ class VideoAnnotator(QWidget):
             json.dump(self.arena_history, f)
         self.update_display()
         
-    # -------- Auto Background Subtraction & Artifacts --------
+    # -------- Auto Background Subtraction & Parallel Pipelines --------
+    def _merge_stats_parallel(self, flat_results):
+        df_new = pd.DataFrame(flat_results)
+        if df_new.empty: return
+        
+        if os.path.exists(self.stats_file):
+            df_existing = pd.read_csv(self.stats_file)
+            if not df_existing.empty:
+                df_existing.set_index('Frame', inplace=True)
+                df_new.set_index('Frame', inplace=True)
+                df_existing.update(df_new)
+                df_combined = pd.concat([df_existing[~df_existing.index.isin(df_new.index)], df_new])
+                df_combined.reset_index(inplace=True)
+                df_combined.sort_values(by='Frame').to_csv(self.stats_file, index=False)
+                return
+                
+        df_new.sort_values(by='Frame').to_csv(self.stats_file, index=False)
+
     def calc_baseline(self):
         if self.cap is None: return
         self.btn_calc_baseline.setText("...Calculating...")
@@ -599,7 +643,7 @@ class VideoAnnotator(QWidget):
             results = pool.map(process_video_chunk_auto_mask, chunks)
             
         flat_results = [item for sublist in results for item in sublist]
-        pd.DataFrame(flat_results).sort_values(by='Frame').to_csv(self.stats_file, index=False)
+        self._merge_stats_parallel(flat_results)
         
         self.btn_auto_all.setText("Auto Mask ALL (Parallel)")
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
@@ -608,28 +652,30 @@ class VideoAnnotator(QWidget):
         QMessageBox.information(self, "Done", f"Time Window Processed instantly across {n_cpus} CPUs!")
         
     def clean_all_artifacts(self):
-        reply = QMessageBox.question(self, "Clean Global Artifacts", "This loops across all existing/configured saved mask files and rigidly DELETES everything except the absolute single longest solid shape per frame (ignoring poop/background anomalies).\n\nAre you sure you want to proceed?", QMessageBox.Yes | QMessageBox.No)
+        reply = QMessageBox.question(self, "Clean Global Artifacts", "This distributes processing across ALL CPUs to rigidly DELETE everything except the absolute single longest solid shape per frame.\n\nAre you sure you want to proceed?", QMessageBox.Yes | QMessageBox.No)
         if reply != QMessageBox.Yes: return
         
-        self.btn_clean_all.setText("...Cleaning Artifacts...")
+        self.btn_clean_all.setText("...Cleaning in Parallel...")
         QApplication.processEvents()
         
-        for i in range(self.analysis_start_frame, self.analysis_end_frame):
-            m_path = os.path.join(self.mask_folder, f"mask_{i:04d}.png")
-            if os.path.exists(m_path):
-                mask = cv2.imread(m_path, cv2.IMREAD_GRAYSCALE)
-                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                if contours:
-                    largest = max(contours, key=cv2.contourArea)
-                    mask.fill(0)
-                    cv2.drawContours(mask, [largest], -1, 255, -1)
-                    cv2.imwrite(m_path, mask)
-                    self.update_stats(i, mask)
+        n_cpus = multiprocessing.cpu_count()
+        total_len = self.analysis_end_frame - self.analysis_start_frame
+        chunk_size = max(1, total_len // (n_cpus * 2))
+        
+        chunks = []
+        for i in range(self.analysis_start_frame, self.analysis_end_frame, chunk_size):
+            chunks.append((i, min(self.analysis_end_frame, i + chunk_size), self.mask_folder))
+            
+        with multiprocessing.Pool(n_cpus) as pool:
+            results = pool.map(process_video_chunk_clean_artifacts, chunks)
+            
+        flat_results = [item for sublist in results for item in sublist]
+        self._merge_stats_parallel(flat_results)
                     
-        self.btn_clean_all.setText("Clean Artifacts (All Frames)")
+        self.btn_clean_all.setText("Clean Artifacts (Parallel)")
         self.read_frame()
         self.update_display()
-        QMessageBox.information(self, "Completed", "Successfully purged all disjointed artifacts/poop across the entire video window! Only the largest primary target remains.")
+        QMessageBox.information(self, "Completed", f"Successfully purged all disjointed artifacts/poop in Parallel across {n_cpus} CPUs! Only the largest primary target remains.")
         
     # -------- Navigation & Core --------
     def prev_frame(self): self.slider.setValue(max(0, self.current_frame_idx - 1))
