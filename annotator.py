@@ -63,30 +63,7 @@ def process_video_chunk_auto_mask(args):
     cap.release()
     return results
 
-def process_video_chunk_clean_artifacts(args):
-    start_f, end_f, mask_folder = args
-    import cv2
-    import numpy as np
-    import os
-    results = []
-    
-    for i in range(start_f, end_f):
-        m_path = os.path.join(mask_folder, f"mask_{i:04d}.png")
-        if os.path.exists(m_path):
-            mask = cv2.imread(m_path, cv2.IMREAD_GRAYSCALE)
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if contours:
-                largest = max(contours, key=cv2.contourArea)
-                mask.fill(0)
-                cv2.drawContours(mask, [largest], -1, 255, -1)
-                cv2.imwrite(m_path, mask)
-                
-            is_painted = (mask > 0)
-            mean_val = np.mean(is_painted)
-            std_val = np.std(is_painted)
-            results.append({'Frame': i, 'Mean_Density': float(mean_val), 'Std_Density': float(std_val)})
-            
-    return results
+
 
 
 # ----- Main Application ------
@@ -200,13 +177,9 @@ class VideoAnnotator(QWidget):
         self.chk_erase = QCheckBox("Erase Mode (E / W)")
         self.chk_erase.stateChanged.connect(self.toggle_erase)
         
-        self.btn_clean_all = QPushButton("Clean Artifacts (Parallel)")
-        self.btn_clean_all.clicked.connect(self.clean_all_artifacts)
-        
         l4.addWidget(QLabel("Brush Size:"))
         l4.addWidget(self.spin_brush)
         l4.addWidget(self.chk_erase)
-        l4.addWidget(self.btn_clean_all)
         l4.addStretch()
         gb4.setLayout(l4)
         
@@ -290,7 +263,7 @@ class VideoAnnotator(QWidget):
         # Disable buttons until video is loaded
         for btn in [self.btn_set_start, self.btn_set_end, self.btn_calc_baseline, 
                     self.btn_define_arena, self.btn_auto_current, self.btn_auto_all,
-                    self.btn_clean_all, self.btn_export_avi, self.btn_export_npy,
+                    self.btn_export_avi, self.btn_export_npy,
                     self.btn_stim_start, self.btn_stim_end, self.btn_stim_add, self.btn_stim_del]:
             btn.setEnabled(False)
         
@@ -354,7 +327,7 @@ class VideoAnnotator(QWidget):
         # Re-enable all step buttons
         for btn in [self.btn_set_start, self.btn_set_end, self.btn_calc_baseline, 
                     self.btn_define_arena, self.btn_auto_current, self.btn_auto_all,
-                    self.btn_clean_all, self.btn_export_avi, self.btn_export_npy,
+                    self.btn_export_avi, self.btn_export_npy,
                     self.btn_stim_start, self.btn_stim_end, self.btn_stim_add, self.btn_stim_del]:
             btn.setEnabled(True)
             
@@ -625,32 +598,7 @@ class VideoAnnotator(QWidget):
         self.update_display()
         QMessageBox.information(self, "Done", f"Time Window Processed instantly across {n_cpus} CPUs!")
         
-    def clean_all_artifacts(self):
-        reply = QMessageBox.question(self, "Clean Global Artifacts", "This distributes processing across ALL CPUs to rigidly DELETE everything except the absolute single longest solid shape per frame.\n\nAre you sure you want to proceed?", QMessageBox.Yes | QMessageBox.No)
-        if reply != QMessageBox.Yes: return
-        
-        self.btn_clean_all.setText("...Cleaning in Parallel...")
-        QApplication.processEvents()
-        
-        n_cpus = multiprocessing.cpu_count()
-        total_len = self.analysis_end_frame - self.analysis_start_frame
-        chunk_size = max(1, total_len // (n_cpus * 2))
-        
-        chunks = []
-        for i in range(self.analysis_start_frame, self.analysis_end_frame, chunk_size):
-            chunks.append((i, min(self.analysis_end_frame, i + chunk_size), self.mask_folder))
-            
-        with multiprocessing.Pool(n_cpus) as pool:
-            results = pool.map(process_video_chunk_clean_artifacts, chunks)
-            
-        flat_results = [item for sublist in results for item in sublist]
-        self._merge_stats_parallel(flat_results)
-                    
-        self.btn_clean_all.setText("Clean Artifacts (Parallel)")
-        self.read_frame()
-        self.update_display()
-        QMessageBox.information(self, "Completed", f"Successfully purged all disjointed artifacts/poop in Parallel across {n_cpus} CPUs! Only the largest primary target remains.")
-        
+
     # -------- Navigation & Core --------
     def prev_frame(self): self.slider.setValue(max(0, self.current_frame_idx - 1))
     def next_frame(self): self.slider.setValue(min(self.total_frames - 1, self.current_frame_idx + 1))

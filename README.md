@@ -49,7 +49,6 @@ To ensure data integrity and prevent errors, the GUI layout enforces a strict 5-
 ### Step 4: Manual Correction
 - Navigate seamlessly employing the `A` and `D` rapid-review keyboard keys.
 - Immediately paint and delete erroneous structural noise using `W` (Draw) and `E` (Erase) hotkeys.
-- **Clean Artifacts**: You can recursively purge all small external mask elements retroactively for the whole recording using the designated Red flush button.
 
 ### Step 5: Deliverables Output
 - **Compile to Array (.npy)**: Generates a single massive 3D `uint8` Array of shape `(num_frames, height, width)` filled purely with `1`s (mouse) and `0`s (background). This file completely supersedes image-based logic, allowing you full programmatic flexibility to compute structural density and spatial spread over time downstream using pure Python or R scripts!
