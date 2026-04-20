@@ -135,6 +135,10 @@ class VideoAnnotator(QWidget):
             self.prev_frame()
         elif event.key() == Qt.Key_D:
             self.next_frame()
+        elif event.key() == Qt.Key_E:
+            self.chk_erase.setChecked(True)
+        elif event.key() == Qt.Key_W:
+            self.chk_erase.setChecked(False)
         else:
             super().keyPressEvent(event)
             
@@ -202,10 +206,9 @@ class VideoAnnotator(QWidget):
                     overlay[mask > 0] = [0, 0, 255]
                     frame = cv2.addWeighted(overlay, 0.4, frame, 0.6, 0)
             
-            # Poly bounding box rendering
             poly = self.get_active_arena_poly(i)
             if poly:
-                p = np.array(poly, dtype=np.int32)
+                p = np.array(poly, dtype=np.int32).reshape((-1, 1, 2))
                 cv2.polylines(frame, [p], True, (0, 255, 0), 2)
             
             out.write(frame)
@@ -233,6 +236,12 @@ class VideoAnnotator(QWidget):
         for f in sorted_frames:
             if f <= frame_idx: active = self.arena_history[f]
             else: break
+            
+        # Legacy support for [x1, y1, x2, y2]
+        if active and len(active) == 4 and isinstance(active[0], (int, float)):
+            x1, y1, x2, y2 = active
+            active = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
+            
         return active
         
     def save_arena_poly(self, poly, frame_idx):
@@ -274,7 +283,7 @@ class VideoAnnotator(QWidget):
         
         poly = self.get_active_arena_poly(frame_idx)
         if poly:
-            p = np.array(poly, dtype=np.int32)
+            p = np.array(poly, dtype=np.int32).reshape((-1, 1, 2))
             mask = np.zeros_like(thresh)
             cv2.fillPoly(mask, [p], 255)
             thresh = cv2.bitwise_and(thresh, mask)
@@ -417,7 +426,7 @@ class VideoAnnotator(QWidget):
         
         poly = self.get_active_arena_poly(self.current_frame_idx)
         if poly is not None:
-            p = np.array(poly, dtype=np.int32)
+            p = np.array(poly, dtype=np.int32).reshape((-1, 1, 2))
             cv2.polylines(overlay, [p], isClosed=True, color=(0, 255, 0), thickness=2)
             
         if self.defining_arena and len(self.arena_polygon_pts) > 0:
