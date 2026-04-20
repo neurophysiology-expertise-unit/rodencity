@@ -12,7 +12,7 @@ from PyQt5.QtGui import QImage, QPixmap
 class VideoAnnotator(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Mouse Video Annotator (with Auto-Detect)")
+        self.setWindowTitle("Mouse Video Annotator (with Auto-Detect & Arena Boundary)")
         
         self.video_path = None
         self.cap = None
@@ -96,12 +96,17 @@ class VideoAnnotator(QWidget):
         self.btn_interpolate = QPushButton("Interpolate Gap")
         self.btn_interpolate.clicked.connect(self.interpolate_gap)
         
+        self.btn_save_arena = QPushButton("Save Mask as Arena")
+        self.btn_save_arena.setStyleSheet("background-color: #ffd966;")
+        self.btn_save_arena.clicked.connect(self.save_arena)
+        
         h_ctrl.addWidget(QLabel("Brush Size:"))
         h_ctrl.addWidget(self.spin_brush)
         h_ctrl.addWidget(self.chk_erase)
         h_ctrl.addWidget(self.btn_clear)
         h_ctrl.addWidget(self.btn_interpolate)
         h_ctrl.addWidget(self.btn_save)
+        h_ctrl.addWidget(self.btn_save_arena)
         
         self.lbl_image = QLabel()
         self.lbl_image.setAlignment(Qt.AlignCenter)
@@ -172,7 +177,24 @@ class VideoAnnotator(QWidget):
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
         self.btn_calc_baseline.setText("Baseline Ready")
         
-    def auto_mask_frame(self, frame_img):
+    def get_active_arena(self, frame_idx):
+        active_idx = -1
+        for i in range(frame_idx, -1, -1):
+            if os.path.exists(os.path.join(self.mask_folder, f"arena_{i:04d}.png")):
+                active_idx = i
+                break
+        if active_idx != -1:
+            return cv2.imread(os.path.join(self.mask_folder, f"arena_{active_idx:04d}.png"), cv2.IMREAD_GRAYSCALE)
+        return None
+
+    def save_arena(self):
+        if self.mask is None: return
+        arena_path = os.path.join(self.mask_folder, f"arena_{self.current_frame_idx:04d}.png")
+        cv2.imwrite(arena_path, self.mask)
+        self.clear_mask()
+        QMessageBox.information(self, "Saved", f"Arena area saved!\n\nThis boundary will restrict Auto-Masking from frame {self.current_frame_idx} onward. The drawing layer has been cleared for you to track mice.")
+        
+    def auto_mask_frame(self, frame_img, frame_idx):
         if self.baseline_bgr is None: return None
         
         diff = cv2.absdiff(frame_img, self.baseline_bgr)
@@ -180,6 +202,11 @@ class VideoAnnotator(QWidget):
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
         _, thresh = cv2.threshold(blur, self.spin_thresh.value(), 255, cv2.THRESH_BINARY)
         
+        # Apply arena mask to crop out false positives outside the arena
+        arena = self.get_active_arena(frame_idx)
+        if arena is not None:
+             thresh = cv2.bitwise_and(thresh, thresh, mask=(arena > 0).astype(np.uint8)*255)
+             
         # morphological closing
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
@@ -189,7 +216,7 @@ class VideoAnnotator(QWidget):
         if self.baseline_bgr is None:
             QMessageBox.warning(self, "Warning", "Please calculate baseline first!")
             return
-        m = self.auto_mask_frame(self.frame_bgr)
+        m = self.auto_mask_frame(self.frame_bgr, self.current_frame_idx)
         if m is not None:
             self.mask = m
             self.save_current_mask()
@@ -207,9 +234,10 @@ class VideoAnnotator(QWidget):
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, i)
             ret, fr = self.cap.read()
             if ret:
-                m = self.auto_mask_frame(fr)
-                cv2.imwrite(os.path.join(self.mask_folder, f"mask_{i:04d}.png"), m)
-                self.update_stats(i, m)
+                m = self.auto_mask_frame(fr, i)
+                if m is not None:
+                    cv2.imwrite(os.path.join(self.mask_folder, f"mask_{i:04d}.png"), m)
+                    self.update_stats(i, m)
                 
                 if i % 10 == 0:
                     self.lbl_frame_info.setText(f"Processing: {i}/{self.total_frames}")
