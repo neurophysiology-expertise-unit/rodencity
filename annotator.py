@@ -73,6 +73,9 @@ class VideoAnnotator(QWidget):
         self.total_frames = 0
         self.current_frame_idx = 0
         
+        self.analysis_start_frame = 0
+        self.analysis_end_frame = 0
+        
         self.frame_bgr = None
         self.mask = None
         self.baseline_bgr = None
@@ -96,7 +99,7 @@ class VideoAnnotator(QWidget):
         v_layout = QVBoxLayout()
         
         # --- Top Navigation ---
-        h_nav = QHBoxLayout()
+        h_main_nav = QHBoxLayout()
         self.btn_load = QPushButton("1. Load Video")
         self.btn_load.clicked.connect(self.load_video)
         
@@ -109,11 +112,24 @@ class VideoAnnotator(QWidget):
         self.btn_next.clicked.connect(self.next_frame)
         self.lbl_frame_info = QLabel("Frame: 0/0")
         
-        h_nav.addWidget(self.btn_load)
-        h_nav.addWidget(self.btn_prev)
-        h_nav.addWidget(self.slider)
-        h_nav.addWidget(self.btn_next)
-        h_nav.addWidget(self.lbl_frame_info)
+        h_main_nav.addWidget(self.btn_load)
+        h_main_nav.addWidget(self.btn_prev)
+        h_main_nav.addWidget(self.slider)
+        h_main_nav.addWidget(self.btn_next)
+        h_main_nav.addWidget(self.lbl_frame_info)
+        
+        # --- Analysis Window Trimming ---
+        h_trim = QHBoxLayout()
+        self.btn_set_start = QPushButton("[ Set Start Time ]")
+        self.btn_set_start.clicked.connect(self.set_start_frame)
+        self.btn_set_end = QPushButton("[ Set End Time ]")
+        self.btn_set_end.clicked.connect(self.set_end_frame)
+        self.lbl_window = QLabel("Analysis Window: All")
+        
+        h_trim.addWidget(self.btn_set_start)
+        h_trim.addWidget(self.btn_set_end)
+        h_trim.addWidget(self.lbl_window)
+        h_trim.addStretch()
         
         # --- Auto Subtraction Controls ---
         h_auto = QHBoxLayout()
@@ -177,7 +193,8 @@ class VideoAnnotator(QWidget):
         self.lbl_image.mouseReleaseEvent = self.mouse_release
         
         v_layout.addWidget(self.lbl_image)
-        v_layout.addLayout(h_nav)
+        v_layout.addLayout(h_main_nav)
+        v_layout.addLayout(h_trim)
         v_layout.addLayout(h_auto)
         v_layout.addLayout(h_ctrl)
         
@@ -213,6 +230,10 @@ class VideoAnnotator(QWidget):
         self.slider.setRange(0, self.total_frames - 1)
         self.slider.setValue(0)
         
+        self.analysis_start_frame = 0
+        self.analysis_end_frame = self.total_frames
+        self.lbl_window.setText(f"Analysis Window: 0 -> {self.total_frames}")
+        
         video_name = os.path.splitext(os.path.basename(self.video_path))[0]
         self.mask_folder = os.path.join(os.path.dirname(self.video_path), f"{video_name}_masks")
         if not os.path.exists(self.mask_folder):
@@ -231,6 +252,17 @@ class VideoAnnotator(QWidget):
         self.read_frame()
         self.update_display()
         
+    # -------- Analysis Window --------
+    def set_start_frame(self):
+        self.analysis_start_frame = self.current_frame_idx
+        self.lbl_window.setText(f"Analysis Window: {self.analysis_start_frame} -> {self.analysis_end_frame}")
+        QMessageBox.information(self, "Start Time Set", f"Analysis start boundary set to frame {self.analysis_start_frame}.")
+        
+    def set_end_frame(self):
+        self.analysis_end_frame = self.current_frame_idx
+        self.lbl_window.setText(f"Analysis Window: {self.analysis_start_frame} -> {self.analysis_end_frame}")
+        QMessageBox.information(self, "End Time Set", f"Analysis end boundary set to frame {self.analysis_end_frame}.")
+        
     # -------- EXPORT VIDEO --------
     def export_video(self):
         if self.cap is None: return
@@ -246,7 +278,7 @@ class VideoAnnotator(QWidget):
         self.btn_export.setText("...Exporting...")
         QApplication.processEvents()
         
-        for i in range(self.total_frames):
+        for i in range(self.analysis_start_frame, self.analysis_end_frame):
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, i)
             ret, frame = self.cap.read()
             if not ret: break
@@ -266,7 +298,7 @@ class VideoAnnotator(QWidget):
             
             out.write(frame)
             if i % 10 == 0:
-                self.lbl_frame_info.setText(f"Exporting: {i}/{self.total_frames}")
+                self.lbl_frame_info.setText(f"Exporting: {i}/{self.analysis_end_frame}")
                 QApplication.processEvents()
                 
         out.release()
@@ -309,8 +341,8 @@ class VideoAnnotator(QWidget):
         QApplication.processEvents()
         
         frames = []
-        step = max(1, self.total_frames // 30)
-        for i in range(0, self.total_frames, step):
+        step = max(1, (self.analysis_end_frame - self.analysis_start_frame) // 30)
+        for i in range(self.analysis_start_frame, self.analysis_end_frame, step):
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, i)
             ret, fr = self.cap.read()
             if ret: frames.append(fr)
@@ -359,18 +391,19 @@ class VideoAnnotator(QWidget):
             QMessageBox.warning(self, "Warning", "Please calculate baseline first!")
             return
             
-        reply = QMessageBox.question(self, "Confirm", "Process all frames in Parallel? Existing masks will be overwritten.", QMessageBox.Yes | QMessageBox.No)
+        reply = QMessageBox.question(self, "Confirm", f"Process frames {self.analysis_start_frame} to {self.analysis_end_frame} in Parallel? Existing masks in this range will be overwritten.", QMessageBox.Yes | QMessageBox.No)
         if reply != QMessageBox.Yes: return
         
         self.btn_auto_all.setText("...Processing in Parallel...")
         QApplication.processEvents()
         
         n_cpus = multiprocessing.cpu_count()
-        chunk_size = max(1, self.total_frames // (n_cpus * 2))
+        total_len = self.analysis_end_frame - self.analysis_start_frame
+        chunk_size = max(1, total_len // (n_cpus * 2))
         
         chunks = []
-        for i in range(0, self.total_frames, chunk_size):
-            chunks.append((self.video_path, i, min(self.total_frames, i + chunk_size), 
+        for i in range(self.analysis_start_frame, self.analysis_end_frame, chunk_size):
+            chunks.append((self.video_path, i, min(self.analysis_end_frame, i + chunk_size), 
                            self.baseline_bgr, self.spin_thresh.value(), 
                            self.chk_invert.isChecked(), self.arena_history, self.mask_folder))
                            
@@ -385,7 +418,7 @@ class VideoAnnotator(QWidget):
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
         self.read_frame()
         self.update_display()
-        QMessageBox.information(self, "Done", f"All {self.total_frames} frames processed instantly across {n_cpus} CPUs!")
+        QMessageBox.information(self, "Done", f"Time Window Processed instantly across {n_cpus} CPUs!")
         
     # -------- Navigation & Core --------
     def prev_frame(self): self.slider.setValue(max(0, self.current_frame_idx - 1))
