@@ -1,7 +1,7 @@
 # Mouse Video Annotation Tool
 
-A simple PyQt5-based desktop application to load `.avi` videos and manually annotate test subjects (such as mice) by drawing on the frames, or automatically detect them using computer vision!
-Annotations are saved as individual mask images and summarized in a density CSV file.
+A powerful PyQt5-based desktop pipeline application to load `.avi` videos and automatically detect test subjects (such as mice) using multithreaded computer vision, while allowing seamless manual gap-interpolation corrections.
+Pixel densities and spatial tracks are logged rigorously to CSV logs for behavioral extraction.
 
 ## Requirements
 Make sure you have a python environment (e.g., Anaconda). We recommend creating a new environment using **Python 3.10** (which has been tested and verified to work perfectly):
@@ -17,23 +17,34 @@ pip install -r requirements.txt
 python main.py
 ```
 
-## Usage
-1. **Load Video**: Click `1. Load Video` and select your `.avi` file.
-2. **Navigation**: Use the slider or press the `A` (`< Prev`) and `D` (`Next >`) keys to efficiently scrub across frames.
-3. **Computer Vision Auto-Masking (Recommended)**:
-   - Click `Calc Baseline (Median)` so the software can isolate the empty plexiglass floor.
-   - Click `3. Define 4-Point Arena` and click exactly on the 4 corners of your physical testing container (tilted or straight) to draw a polygonal border so auto-detection ignores external shadows. 
-   - Use `Auto Mask Current` or `Auto Mask ALL` to let OpenCV dynamically find your moving subjects and automatically draw borders around them! You can tweak the spinbox threshold value if it's too aggressive or weak.
-4. **Manual Mode**:
-   - You can also manually paint annotations. It automatically superimposes the previous drawing when entering a blank frame! If you skip multiple frames, use the `Interpolate Gap` button to instantly stretch missing labels between two manually traced points over time!
-5. **Data Output**: Every time you draw or the computer auto-detects, masks are instantly autosaved to a `<videoname>_masks` folder alongside a continuous `density_stats.csv` recording exactly how much pixel density is tracked across frames.
+## Analytical Pipeline & Usage
 
-## Publishing to GitHub
-To put your project on GitHub:
-1. Create an empty repository named `rodencity` under the `neurophysiology-expertise-unit` organization via GitHub's interface (do NOT initialize it with a README or .gitignore).
-2. Run these commands from your local `rodencity` folder:
+To ensure data integrity and prevent errors, the GUI layout enforces a strict 5-Step sequential order:
 
-```bash
-git remote add origin https://github.com/neurophysiology-expertise-unit/rodencity.git
-git push -u origin main
-```
+### Step 1: Video & Time Window
+- **Load Video**: Select your `.mp4` or `.avi` testing video.
+- **Set Window**: Use the slider to scrub past messy setup shots. Click `[ Set Start Time ]` and `[ Set End Time ]` to trim the video natively, restricting all algorithms from scanning noise data recorded prior to the actual session start. 
+
+### Step 2: Environment Constraint
+- **Calc Baseline**: Computes the static background median strictly across your inner time window.
+- **Define 4-Point Arena**: Click explicitly on the 4 spatial corners of your inner-arena structure (to account for skewed camera angles!) to generate a constraining polygonal geometry.
+
+### Step 3: Fast Mask Generation
+- **Settings**: Adjust your subtraction threshold size or engage **Invert Detection** (if the software extracts environmental backgrounds instead of subjects).
+- **Auto Mask ALL (Parallel)**: Subdivides the video across all available system multiprocessing cores to generate boundary mapping instantaneously. 
+
+### Step 4: Manual Correction
+- Navigate seamlessly employing the `A` and `D` rapid-review keyboard keys.
+- Immediately paint and delete erroneous structural noise using `W` (Draw) and `E` (Erase) hotkeys.
+- **Interpolate Gap**: Geometrically transforms and extrapolates tracking geometry across untracked frames sandwiched by mapped ones! 
+
+### Step 5: Render Engine
+- **Export Final Labeled Video** compiles all constraints, temporal tags, masks, and boundaries spanning solely the analytical window into a structurally finalized `<vid>_labeled.avi` without mutating the underlying read-only asset.
+
+---
+
+### Stimulus Tagging (Sidebar)
+On the far right pane, establish timelines mapping when stimuli occur (e.g., light flashes or shocks):
+1. Register `Mark START Here` and `Mark END Here` using the playhead.
+2. Click `+ Add Stimulus to List`.
+3. The system tracks absolute frame counts and duration intervals, generating a localized `stimulus_events.csv` structure that corresponds accurately alongside the primary `density_stats.csv`.
