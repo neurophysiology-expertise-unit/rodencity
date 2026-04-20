@@ -1,6 +1,6 @@
 # Mouse Video Annotation Tool
 
-A powerful PyQt5-based desktop pipeline application to load `.avi` videos and automatically detect test subjects (such as mice) using multithreaded computer vision, while allowing seamless manual gap-interpolation corrections.
+A powerful PyQt5-based desktop pipeline application to load `.avi` videos and automatically detect test subjects (such as mice) using multithreaded computer vision, while allowing seamless manual gap corrections.
 Pixel densities and spatial tracks are logged rigorously to CSV logs for behavioral extraction.
 
 ## Requirements
@@ -17,6 +17,19 @@ pip install -r requirements.txt
 python main.py
 ```
 
+## Creating a Standalone Executable
+If another lab member wants to run this tool without installing Python or Anaconda, you can compile it into a simple standalone `.exe` using `pyinstaller`.
+
+1. Install PyInstaller into the environment:
+```bash
+pip install pyinstaller
+```
+2. Build the application executable file (this hides the debug console):
+```bash
+pyinstaller --onefile --windowed main.py --name rodencity
+```
+3. A `dist/` directory will automatically be created containing your executable executable/app!
+
 ## Analytical Pipeline & Usage
 
 To ensure data integrity and prevent errors, the GUI layout enforces a strict 5-Step sequential order:
@@ -31,15 +44,16 @@ To ensure data integrity and prevent errors, the GUI layout enforces a strict 5-
 
 ### Step 3: Fast Mask Generation
 - **Settings**: Adjust your subtraction threshold size or engage **Invert Detection** (if the software extracts environmental backgrounds instead of subjects).
+- **Keep Largest Object Only**: Keep this checked so the compiler geometrically scans for the actual subject bounding-box area while inherently dismissing static poop/bedding anomalies!
 - **Auto Mask ALL (Parallel)**: Subdivides the video across all available system multiprocessing cores to generate boundary mapping instantaneously. 
 
 ### Step 4: Manual Correction
 - Navigate seamlessly employing the `A` and `D` rapid-review keyboard keys.
 - Immediately paint and delete erroneous structural noise using `W` (Draw) and `E` (Erase) hotkeys.
-- **Interpolate Gap**: Geometrically transforms and extrapolates tracking geometry across untracked frames sandwiched by mapped ones! 
+- **Clean Artifacts**: You can recursively purge all small external mask elements retroactively for the whole recording using the designated Red flush button.
 
 ### Step 5: Render Engine
-- **Export Final Labeled Video** compiles all constraints, temporal tags, masks, and boundaries spanning solely the analytical window into a structurally finalized `<vid>_labeled.avi` without mutating the underlying read-only asset.
+- **Export Final Labeled Video** compiles all constraints, temporal tags, masks, and boundaries spanning solely the analytical window into a structurally finalized `<vid>_labeled.avi` without mutating the underlying read-only asset. *(Note: Export stitching is an inherently sequential linear process; it does not utilize multiprocessing, but relies on heavily optimized single-core rendering).*
 
 ---
 

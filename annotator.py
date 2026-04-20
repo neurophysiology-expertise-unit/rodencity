@@ -177,7 +177,7 @@ class VideoAnnotator(QWidget):
         gb3.setLayout(l3)
         
         # Step 4: Manual Review
-        gb4 = QGroupBox("Step 4: Manual Checking & Interpolation")
+        gb4 = QGroupBox("Step 4: Manual Checking")
         l4 = QHBoxLayout()
         self.spin_brush = QSpinBox()
         self.spin_brush.setRange(1, 100)
@@ -186,9 +186,6 @@ class VideoAnnotator(QWidget):
         self.chk_erase = QCheckBox("Erase Mode (E / W)")
         self.chk_erase.stateChanged.connect(self.toggle_erase)
         
-        self.btn_interpolate = QPushButton("Interpolate Gap")
-        self.btn_interpolate.clicked.connect(self.interpolate_gap)
-        
         self.btn_clean_all = QPushButton("Clean Artifacts (All Frames)")
         self.btn_clean_all.setStyleSheet("background-color: #e06666; color: white;")
         self.btn_clean_all.clicked.connect(self.clean_all_artifacts)
@@ -196,7 +193,6 @@ class VideoAnnotator(QWidget):
         l4.addWidget(QLabel("Brush Size:"))
         l4.addWidget(self.spin_brush)
         l4.addWidget(self.chk_erase)
-        l4.addWidget(self.btn_interpolate)
         l4.addWidget(self.btn_clean_all)
         l4.addStretch()
         gb4.setLayout(l4)
@@ -280,7 +276,7 @@ class VideoAnnotator(QWidget):
         # Disable buttons until video is loaded
         for btn in [self.btn_set_start, self.btn_set_end, self.btn_calc_baseline, 
                     self.btn_define_arena, self.btn_auto_current, self.btn_auto_all,
-                    self.btn_interpolate, self.btn_export, self.btn_clean_all,
+                    self.btn_clean_all, self.btn_export,
                     self.btn_stim_start, self.btn_stim_end, self.btn_stim_add, self.btn_stim_del]:
             btn.setEnabled(False)
         
@@ -343,7 +339,7 @@ class VideoAnnotator(QWidget):
         # Re-enable all step buttons
         for btn in [self.btn_set_start, self.btn_set_end, self.btn_calc_baseline, 
                     self.btn_define_arena, self.btn_auto_current, self.btn_auto_all,
-                    self.btn_interpolate, self.btn_export, self.btn_clean_all,
+                    self.btn_clean_all, self.btn_export,
                     self.btn_stim_start, self.btn_stim_end, self.btn_stim_add, self.btn_stim_del]:
             btn.setEnabled(True)
             
@@ -641,34 +637,6 @@ class VideoAnnotator(QWidget):
         mask_path = os.path.join(self.mask_folder, f"mask_{self.current_frame_idx:04d}.png")
         cv2.imwrite(mask_path, self.mask)
         self.update_stats(self.current_frame_idx, self.mask)
-        
-    def interpolate_gap(self):
-        if self.current_frame_idx == 0 or self.mask is None: return
-        prev_idx = -1
-        for i in range(self.current_frame_idx - 1, -1, -1):
-            if os.path.exists(os.path.join(self.mask_folder, f"mask_{i:04d}.png")):
-                prev_idx = i; break
-        if prev_idx == -1: return
-            
-        mask_prev = cv2.imread(os.path.join(self.mask_folder, f"mask_{prev_idx:04d}.png"), cv2.IMREAD_GRAYSCALE)
-        mask_curr = self.mask
-        
-        M_p = cv2.moments(mask_prev)
-        M_c = cv2.moments(mask_curr)
-        cx_p = M_p['m10']/M_p['m00'] if M_p['m00']>0 else 0
-        cy_p = M_p['m01']/M_p['m00'] if M_p['m00']>0 else 0
-        cx_c = M_c['m10']/M_c['m00'] if M_c['m00']>0 else 0
-        cy_c = M_c['m01']/M_c['m00'] if M_c['m00']>0 else 0
-        
-        total_steps = self.current_frame_idx - prev_idx
-        for step in range(1, total_steps):
-            idx = prev_idx + step
-            w = step / total_steps
-            M_trans = np.float32([[1, 0, int((cx_c - cx_p)*w)], [0, 1, int((cy_c - cy_p)*w)]])
-            shifted = cv2.warpAffine(mask_prev, M_trans, (mask_prev.shape[1], mask_prev.shape[0]))
-            cv2.imwrite(os.path.join(self.mask_folder, f"mask_{idx:04d}.png"), shifted)
-            self.update_stats(idx, shifted)
-        QMessageBox.information(self, "Success", f"Interpolated {total_steps - 1} frames.")
         
     def update_stats(self, frame_idx, mask_array):
         is_painted = (mask_array > 0)
