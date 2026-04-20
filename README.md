@@ -52,8 +52,9 @@ To ensure data integrity and prevent errors, the GUI layout enforces a strict 5-
 - Immediately paint and delete erroneous structural noise using `W` (Draw) and `E` (Erase) hotkeys.
 - **Clean Artifacts**: You can recursively purge all small external mask elements retroactively for the whole recording using the designated Red flush button.
 
-### Step 5: Render Engine
-- **Export Final Labeled Video** compiles all constraints, temporal tags, masks, and boundaries spanning solely the analytical window into a structurally finalized `<vid>_labeled.avi` without mutating the underlying read-only asset. *(Note: Export stitching is an inherently sequential linear process; it does not utilize multiprocessing, but relies on heavily optimized single-core rendering).*
+### Step 5: Deliverables Output
+- **Compile to Array (.npy)**: Generates a single massive 3D `uint8` Array of shape `(num_frames, height, width)` filled purely with `1`s (mouse) and `0`s (background). This file completely supersedes image-based logic, allowing you full programmatic flexibility to compute structural density and spatial spread over time downstream using pure Python or R scripts!
+- **Render Labeled Video (.avi)**: Optionally export a visual check video. *(Note: Export stitching is an inherently sequential linear process; it does not utilize multiprocessing, but relies on heavily optimized single-core rendering).*
 
 ---
 

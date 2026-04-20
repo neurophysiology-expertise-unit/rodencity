@@ -197,13 +197,19 @@ class VideoAnnotator(QWidget):
         l4.addStretch()
         gb4.setLayout(l4)
         
-        # Step 5: Export
-        gb5 = QGroupBox("Step 5: Export")
+        # Step 5: Export / Data Extraction
+        gb5 = QGroupBox("Step 5: Final Output & Data Extraction")
         l5 = QHBoxLayout()
-        self.btn_export = QPushButton("Export Final Labeled Video")
-        self.btn_export.setStyleSheet("background-color: #93c47d;")
-        self.btn_export.clicked.connect(self.export_video)
-        l5.addWidget(self.btn_export)
+        self.btn_export_npy = QPushButton("Compile to Array (.npy)")
+        self.btn_export_npy.setStyleSheet("background-color: #8e7cc3; color: white; font-weight: bold;")
+        self.btn_export_npy.clicked.connect(self.export_numpy)
+        
+        self.btn_export_avi = QPushButton("Render Labeled Video (.avi)")
+        self.btn_export_avi.setStyleSheet("background-color: #93c47d;")
+        self.btn_export_avi.clicked.connect(self.export_video)
+        
+        l5.addWidget(self.btn_export_npy)
+        l5.addWidget(self.btn_export_avi)
         l5.addStretch()
         gb5.setLayout(l5)
         
@@ -276,7 +282,7 @@ class VideoAnnotator(QWidget):
         # Disable buttons until video is loaded
         for btn in [self.btn_set_start, self.btn_set_end, self.btn_calc_baseline, 
                     self.btn_define_arena, self.btn_auto_current, self.btn_auto_all,
-                    self.btn_clean_all, self.btn_export,
+                    self.btn_clean_all, self.btn_export_avi, self.btn_export_npy,
                     self.btn_stim_start, self.btn_stim_end, self.btn_stim_add, self.btn_stim_del]:
             btn.setEnabled(False)
         
@@ -314,14 +320,15 @@ class VideoAnnotator(QWidget):
         self.analysis_end_frame = self.total_frames
         self.lbl_window.setText(f"Window: 0 -> {self.total_frames}")
         
+        # Temporary internal mask folder, real data output is .npy at the end
         video_name = os.path.splitext(os.path.basename(self.video_path))[0]
-        self.mask_folder = os.path.join(os.path.dirname(self.video_path), f"{video_name}_masks")
+        self.mask_folder = os.path.join(os.path.dirname(self.video_path), f"_{video_name}_internal_cache")
         if not os.path.exists(self.mask_folder):
             os.makedirs(self.mask_folder)
             
-        self.stats_file = os.path.join(self.mask_folder, "density_stats.csv")
-        self.arena_file = os.path.join(self.mask_folder, "arena_bounds.json")
-        self.stim_file = os.path.join(self.mask_folder, "stimulus_events.csv")
+        self.stats_file = os.path.join(os.path.dirname(self.video_path), f"{video_name}_density_stats.csv")
+        self.arena_file = os.path.join(os.path.dirname(self.video_path), f"{video_name}_arena_bounds.json")
+        self.stim_file = os.path.join(os.path.dirname(self.video_path), f"{video_name}_stimulus_events.csv")
         
         if os.path.exists(self.arena_file):
             with open(self.arena_file, "r") as f:
@@ -339,7 +346,7 @@ class VideoAnnotator(QWidget):
         # Re-enable all step buttons
         for btn in [self.btn_set_start, self.btn_set_end, self.btn_calc_baseline, 
                     self.btn_define_arena, self.btn_auto_current, self.btn_auto_all,
-                    self.btn_clean_all, self.btn_export,
+                    self.btn_clean_all, self.btn_export_avi, self.btn_export_npy,
                     self.btn_stim_start, self.btn_stim_end, self.btn_stim_add, self.btn_stim_del]:
             btn.setEnabled(True)
             
@@ -405,7 +412,38 @@ class VideoAnnotator(QWidget):
         self.lbl_window.setText(f"Window: {self.analysis_start_frame} -> {self.analysis_end_frame}")
         QMessageBox.information(self, "End Time Set", f"Analysis end boundary set to frame {self.analysis_end_frame}.")
         
-    # -------- EXPORT VIDEO --------
+    # -------- DATA EXPORT MODULES --------
+    def export_numpy(self):
+        if self.cap is None: return
+        export_path = os.path.splitext(self.video_path)[0] + "_binary_masks.npy"
+        
+        w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_export_frames = self.analysis_end_frame - self.analysis_start_frame
+        
+        self.btn_export_npy.setText("...Compiling Array...")
+        QApplication.processEvents()
+        
+        stack = np.zeros((total_export_frames, h, w), dtype=np.uint8)
+        
+        for idx, i in enumerate(range(self.analysis_start_frame, self.analysis_end_frame)):
+            m_path = os.path.join(self.mask_folder, f"mask_{i:04d}.png")
+            if os.path.exists(m_path):
+                mask = cv2.imread(m_path, cv2.IMREAD_GRAYSCALE)
+                if mask is not None:
+                    stack[idx] = np.where(mask > 0, 1, 0)
+            
+            if idx % 100 == 0:
+                self.lbl_frame_info.setText(f"Stacking: {idx}/{total_export_frames}")
+                QApplication.processEvents()
+                
+        np.save(export_path, stack)
+        
+        self.read_frame()
+        self.update_display()
+        self.btn_export_npy.setText("Compile to Array (.npy)")
+        QMessageBox.information(self, "Export Complete", f"Successfully extracted your dataset!\n\nPath: {export_path}\nShape: {stack.shape}\nData Type: uint8 binary array (1/0)\n\nThis removes any reliance on saved PNG images for your downstream mathematical analysis scripts!")
+        
     def export_video(self):
         if self.cap is None: return
         export_path = os.path.splitext(self.video_path)[0] + "_labeled.avi"
@@ -417,7 +455,7 @@ class VideoAnnotator(QWidget):
         fourcc = cv2.VideoWriter_fourcc(*'XVID')
         out = cv2.VideoWriter(export_path, fourcc, fps, (w, h))
         
-        self.btn_export.setText("...Exporting...")
+        self.btn_export_avi.setText("...Exporting...")
         QApplication.processEvents()
         
         for i in range(self.analysis_start_frame, self.analysis_end_frame):
@@ -440,14 +478,14 @@ class VideoAnnotator(QWidget):
             
             out.write(frame)
             if i % 10 == 0:
-                self.lbl_frame_info.setText(f"Exporting: {i}/{self.analysis_end_frame}")
+                self.lbl_frame_info.setText(f"Exporting: {i-self.analysis_start_frame}/{self.analysis_end_frame-self.analysis_start_frame}")
                 QApplication.processEvents()
                 
         out.release()
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
         self.read_frame()
         self.update_display()
-        self.btn_export.setText("Export Final Labeled Video")
+        self.btn_export_avi.setText("Render Labeled Video (.avi)")
         QMessageBox.information(self, "Export Complete", f"Successfully exported labeled video to:\n{export_path}")
         
     # -------- Arena Definition --------
