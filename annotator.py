@@ -13,7 +13,7 @@ from PyQt5.QtGui import QImage, QPixmap
 
 # ----- Parallel Worker Logic ------
 def process_video_chunk_auto_mask(args):
-    video_path, start_f, end_f, baseline_bgr, spin_thresh_value, invert_checked, arena_history, mask_folder = args
+    video_path, start_f, end_f, baseline_bgr, spin_thresh_value, invert_checked, arena_history, mask_folder, keep_largest = args
     import cv2
     import numpy as np
     
@@ -50,6 +50,13 @@ def process_video_chunk_auto_mask(args):
             thresh = cv2.bitwise_and(thresh, mask)
             
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+        
+        if keep_largest:
+            contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                largest = max(contours, key=cv2.contourArea)
+                closed.fill(0)
+                cv2.drawContours(closed, [largest], -1, 255, -1)
         
         import os
         cv2.imwrite(os.path.join(mask_folder, f"mask_{i:04d}.png"), closed)
@@ -104,8 +111,6 @@ class VideoAnnotator(QWidget):
         main_h_layout = QHBoxLayout()
         v_layout = QVBoxLayout()
         
-        # --- UI Groups for Pipeline Order ---
-        
         # Step 1: Load & Trim
         gb1 = QGroupBox("Step 1: Video & Time Window")
         l1 = QVBoxLayout()
@@ -153,6 +158,10 @@ class VideoAnnotator(QWidget):
         self.spin_thresh.setRange(1, 255)
         self.spin_thresh.setValue(30)
         self.chk_invert = QCheckBox("Invert")
+        
+        self.chk_largest = QCheckBox("Keep Largest Object Only (Ignore Poop)")
+        self.chk_largest.setChecked(True)
+        
         self.btn_auto_current = QPushButton("Auto Mask Current (Test)")
         self.btn_auto_current.clicked.connect(self.apply_auto_mask_current)
         self.btn_auto_all = QPushButton("Auto Mask ALL (Parallel)")
@@ -161,6 +170,7 @@ class VideoAnnotator(QWidget):
         l3.addWidget(QLabel("Thresh:"))
         l3.addWidget(self.spin_thresh)
         l3.addWidget(self.chk_invert)
+        l3.addWidget(self.chk_largest)
         l3.addWidget(self.btn_auto_current)
         l3.addWidget(self.btn_auto_all)
         l3.addStretch()
@@ -175,12 +185,19 @@ class VideoAnnotator(QWidget):
         self.spin_brush.valueChanged.connect(self.change_brush)
         self.chk_erase = QCheckBox("Erase Mode (E / W)")
         self.chk_erase.stateChanged.connect(self.toggle_erase)
+        
         self.btn_interpolate = QPushButton("Interpolate Gap")
         self.btn_interpolate.clicked.connect(self.interpolate_gap)
+        
+        self.btn_clean_all = QPushButton("Clean Artifacts (All Frames)")
+        self.btn_clean_all.setStyleSheet("background-color: #e06666; color: white;")
+        self.btn_clean_all.clicked.connect(self.clean_all_artifacts)
+        
         l4.addWidget(QLabel("Brush Size:"))
         l4.addWidget(self.spin_brush)
         l4.addWidget(self.chk_erase)
         l4.addWidget(self.btn_interpolate)
+        l4.addWidget(self.btn_clean_all)
         l4.addStretch()
         gb4.setLayout(l4)
         
@@ -263,7 +280,7 @@ class VideoAnnotator(QWidget):
         # Disable buttons until video is loaded
         for btn in [self.btn_set_start, self.btn_set_end, self.btn_calc_baseline, 
                     self.btn_define_arena, self.btn_auto_current, self.btn_auto_all,
-                    self.btn_interpolate, self.btn_export,
+                    self.btn_interpolate, self.btn_export, self.btn_clean_all,
                     self.btn_stim_start, self.btn_stim_end, self.btn_stim_add, self.btn_stim_del]:
             btn.setEnabled(False)
         
@@ -326,7 +343,7 @@ class VideoAnnotator(QWidget):
         # Re-enable all step buttons
         for btn in [self.btn_set_start, self.btn_set_end, self.btn_calc_baseline, 
                     self.btn_define_arena, self.btn_auto_current, self.btn_auto_all,
-                    self.btn_interpolate, self.btn_export,
+                    self.btn_interpolate, self.btn_export, self.btn_clean_all,
                     self.btn_stim_start, self.btn_stim_end, self.btn_stim_add, self.btn_stim_del]:
             btn.setEnabled(True)
             
@@ -463,7 +480,7 @@ class VideoAnnotator(QWidget):
             json.dump(self.arena_history, f)
         self.update_display()
         
-    # -------- Auto Background Subtraction --------
+    # -------- Auto Background Subtraction & Artifacts --------
     def calc_baseline(self):
         if self.cap is None: return
         self.btn_calc_baseline.setText("...Calculating...")
@@ -503,6 +520,14 @@ class VideoAnnotator(QWidget):
         
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+        
+        if self.chk_largest.isChecked():
+            contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                largest = max(contours, key=cv2.contourArea)
+                closed.fill(0)
+                cv2.drawContours(closed, [largest], -1, 255, -1)
+                
         return closed
         
     def apply_auto_mask_current(self):
@@ -534,7 +559,7 @@ class VideoAnnotator(QWidget):
         for i in range(self.analysis_start_frame, self.analysis_end_frame, chunk_size):
             chunks.append((self.video_path, i, min(self.analysis_end_frame, i + chunk_size), 
                            self.baseline_bgr, self.spin_thresh.value(), 
-                           self.chk_invert.isChecked(), self.arena_history, self.mask_folder))
+                           self.chk_invert.isChecked(), self.arena_history, self.mask_folder, self.chk_largest.isChecked()))
                            
         with multiprocessing.Pool(n_cpus) as pool:
             results = pool.map(process_video_chunk_auto_mask, chunks)
@@ -547,6 +572,30 @@ class VideoAnnotator(QWidget):
         self.read_frame()
         self.update_display()
         QMessageBox.information(self, "Done", f"Time Window Processed instantly across {n_cpus} CPUs!")
+        
+    def clean_all_artifacts(self):
+        reply = QMessageBox.question(self, "Clean Global Artifacts", "This loops across all existing/configured saved mask files and rigidly DELETES everything except the absolute single longest solid shape per frame (ignoring poop/background anomalies).\n\nAre you sure you want to proceed?", QMessageBox.Yes | QMessageBox.No)
+        if reply != QMessageBox.Yes: return
+        
+        self.btn_clean_all.setText("...Cleaning Artifacts...")
+        QApplication.processEvents()
+        
+        for i in range(self.analysis_start_frame, self.analysis_end_frame):
+            m_path = os.path.join(self.mask_folder, f"mask_{i:04d}.png")
+            if os.path.exists(m_path):
+                mask = cv2.imread(m_path, cv2.IMREAD_GRAYSCALE)
+                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                if contours:
+                    largest = max(contours, key=cv2.contourArea)
+                    mask.fill(0)
+                    cv2.drawContours(mask, [largest], -1, 255, -1)
+                    cv2.imwrite(m_path, mask)
+                    self.update_stats(i, mask)
+                    
+        self.btn_clean_all.setText("Clean Artifacts (All Frames)")
+        self.read_frame()
+        self.update_display()
+        QMessageBox.information(self, "Completed", "Successfully purged all disjointed artifacts/poop across the entire video window! Only the largest primary target remains.")
         
     # -------- Navigation & Core --------
     def prev_frame(self): self.slider.setValue(max(0, self.current_frame_idx - 1))
