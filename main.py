@@ -1,6 +1,6 @@
 import sys
 from PyQt5.QtWidgets import QApplication
-from annotator import VideoAnnotator
+from gui.annotator import VideoAnnotator
 
 def main():
     app = QApplication(sys.argv)
