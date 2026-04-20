@@ -30,6 +30,11 @@ pyinstaller --onefile --windowed main.py --name rodencity
 ```
 3. A `dist/` directory will automatically be created containing your executable executable/app!
 
+> [!WARNING]
+> **"No Qt Platform Plugin" Error on Windows?**
+> If your `.exe` crashes instantly with `no qt platform plugin could be initialized`, it is because the standard `opencv-python` comes bundled with its own Qt plugins which overwrite and conflict with `PyQt5` during the PyInstaller build sequence.
+> **Fix:** Ensure you have uninstalled `opencv-python` and exclusively installed `opencv-python-headless` in your environment prior to running PyInstaller!
+
 ## Analytical Pipeline & Usage
 
 To ensure data integrity and prevent errors, the GUI layout enforces a strict 5-Step sequential order:
