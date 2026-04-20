@@ -23,10 +23,10 @@ python main.py
 
 ## Publishing to GitHub
 To put your project on GitHub:
-1. Create an empty repository on your GitHub account via github.com/new (do NOT initialize it with a README or .gitignore).
-2. Run these commands from the `mouse-video-annotation` folder:
+1. Create an empty repository named `rodencity` under the `neurophysiology-expertise-unit` organization via GitHub's interface (do NOT initialize it with a README or .gitignore).
+2. Run these commands from your local `rodencity` folder:
 
 ```bash
-git remote add origin https://github.com/<your-username>/<your-repo-name>.git
+git remote add origin https://github.com/neurophysiology-expertise-unit/rodencity.git
 git push -u origin master
 ```
