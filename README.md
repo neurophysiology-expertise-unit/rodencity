@@ -61,3 +61,27 @@ On the far right pane, establish timelines mapping when stimuli occur (e.g., lig
 1. Register `Mark START Here` and `Mark END Here` using the playhead.
 2. Click `+ Add Stimulus to List`.
 3. The system tracks absolute frame counts and duration intervals, generating a localized `stimulus_events.csv` structure that corresponds accurately alongside the primary `density_stats.csv`.
+
+---
+
+## Phase 2: NumPy Data Analysis & Execution Scripts
+
+The `rodencity` layout inherently exports pure uncompressed computational binary structures (`_binary_masks.npy`). You can rapidly compile these outputs into tabular data constraints and graphs.
+
+### Automated CSV processing
+We provide a standalone mathematical extraction script that iterates over your binary files:
+```bash
+python scripts/process_video.py --npy myvideo_binary_masks.npy --stim myvideo_stimulus_events.csv
+```
+This engine structurally analyzes the physical pixel representations and parses them out into quantitative spreadsheets:
+- `spatial_metrics_results.csv`: Extracts fundamental behavior on **every single continuous frame**. Triggers properties like `Area` density metrics, target tracking variables (`Centroid_X / Centroid_Y`), and geometric target density mappings (`Spread_Total`).
+- `stimulus_correlations_results.csv`: Auto-crops isolated bounds across exact `stimulus` triggers isolated via the user.
+
+### Instant Statistical Visualization Plots
+Deploy the natively bundled chart render utility directly against your resulting csv sheets to isolate temporal anomalies without interacting with deep programming languages!
+```bash
+python scripts/visualize.py --metrics spatial_metrics_results.csv
+```
+**This automatically compiles:**
+- `area_over_time.png`: Maps target contour "shrinking/enlargement" logic sequentially along timestamps (excellent for monitoring body tension or scatter responses).
+- `motion_trajectory.png`: Visualizes structural X/Y tracking paths across the test arena (invaluable for continuous maze velocity calculations or exploration algorithms).
