@@ -183,11 +183,14 @@ for strain in ['pm', 'po']:
     
     plt.figure(figsize=(10, 6))
     
+    # Enforce consistent order for stimulus types
+    stim_order = ['DS', 'SS', 'EWD', 'EDD']
+    
     # We use dodge=True so before and after don't overlap completely
     sns.pointplot(data=strain_df, x='Type', y='Density', hue='Period', 
-                  capsize=0.1, errorbar='se', join=False, dodge=0.4, palette='dark')
+                  capsize=0.1, errorbar='se', join=False, dodge=0.4, palette='dark', order=stim_order)
     sns.stripplot(data=strain_df, x='Type', y='Density', hue='Period', 
-                  dodge=0.4, alpha=0.5, size=7, palette='pastel', zorder=0)
+                  dodge=0.4, alpha=0.5, size=7, palette='pastel', zorder=0, order=stim_order)
     
     plt.title(f'Stimulus Response Comparison ({strain.upper()} Strain)')
     plt.ylabel('Mean Density')
@@ -207,10 +210,13 @@ for strain in ['pm', 'po']:
     
     plt.figure(figsize=(10, 6))
     
+    # Enforce consistent order for stimulus types
+    stim_order = ['DS', 'SS', 'EWD', 'EDD']
+    
     sns.pointplot(data=strain_df, x='Type', y='Z_Score', 
-                  capsize=0.1, errorbar='se', join=False, color='black')
+                  capsize=0.1, errorbar='se', join=False, color='black', order=stim_order)
     sns.stripplot(data=strain_df, x='Type', y='Z_Score', 
-                  alpha=0.5, size=7, color='red', zorder=0)
+                  alpha=0.5, size=7, color='red', zorder=0, order=stim_order)
     
     plt.title(f'Z-Scored Stimulus Response ({strain.upper()} Strain)')
     plt.ylabel('Z-Score (vs Baseline)')
