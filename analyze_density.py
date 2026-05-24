@@ -226,4 +226,9 @@ for strain in ['pm', 'po']:
     plt.savefig(os.path.join(output_dir, f'zscore_summary_{strain}.png'), bbox_inches='tight')
     plt.close()
 
+# Export the summary data (including Z-scores) to CSV for statistical analysis
+csv_path = os.path.join(output_dir, 'zscore_summary_data.csv')
+animal_means.to_csv(csv_path, index=False)
+print(f"Summary data saved to: {csv_path}")
+
 print("Analysis complete. Check output directory: ", output_dir)
