@@ -320,8 +320,11 @@ class VideoAnnotator(QWidget):
             
         self.stimulus_events = []
         if os.path.exists(self.stim_file):
-            df = pd.read_csv(self.stim_file)
-            self.stimulus_events = df.to_dict('records')
+            try:
+                df = pd.read_csv(self.stim_file)
+                self.stimulus_events = df.to_dict('records')
+            except Exception as e:
+                QMessageBox.warning(self, "Load Error", f"Could not load stimulus file. Error: {e}")
         self.refresh_stim_list()
             
         # Re-enable all step buttons
@@ -376,11 +379,20 @@ class VideoAnnotator(QWidget):
     def refresh_stim_list(self):
         self.list_stimulus.clear()
         for i, ev in enumerate(self.stimulus_events):
-            self.list_stimulus.addItem(f"Evt {i+1}: F{ev['Start']} -> F{ev['End']} ({ev['Duration']} frames)")
+            s = ev.get('Start', '??')
+            e = ev.get('End', '??')
+            d = ev.get('Duration', '??')
+            t = ev.get('Type', '')
+            label = f"Evt {i+1}: F{s} -> F{e} ({d} frames)"
+            if t: label += f" [{t}]"
+            self.list_stimulus.addItem(label)
             
     def write_stim_csv(self):
         if not self.stim_file: return
-        pd.DataFrame(self.stimulus_events).to_csv(self.stim_file, index=False)
+        try:
+            pd.DataFrame(self.stimulus_events).to_csv(self.stim_file, index=False)
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Could not save stimulus events. Please close the file if it is open in Excel.\n\nError: {e}")
 
     # -------- Analysis Window --------
     def set_start_frame(self):
@@ -661,7 +673,10 @@ class VideoAnnotator(QWidget):
         if not found:
             data.append({'Frame': frame_idx, 'Mean_Density': mean_val, 'Std_Density': std_val})
             
-        pd.DataFrame(data).sort_values(by='Frame').to_csv(self.stats_file, index=False)
+        try:
+            pd.DataFrame(data).sort_values(by='Frame').to_csv(self.stats_file, index=False)
+        except Exception as e:
+            print(f"Warning: Could not save density stats (file might be locked). Error: {e}")
         
     def update_display(self):
         if self.frame_bgr is None: return
