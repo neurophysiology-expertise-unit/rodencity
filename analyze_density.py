@@ -28,14 +28,15 @@ for g in groups:
             
         events = pd.read_csv(events_path)
         events['Type'] = events['Type'].str.strip() # Strip whitespaces
-        events['Animal'] = animal_id
-        events['Strain'] = g
+        display_g = 'bw' if g == 'pm' else g
+        events['Strain'] = display_g
+        events['Animal'] = f"{display_g}_{a}"
         events = events.sort_values(by='Start')
         all_events.append(events)
         
         density = pd.read_csv(density_path)
         # Create mapping of Frame -> Mean_Density
-        density_data[animal_id] = dict(zip(density['Frame'], density['Mean_Density']))
+        density_data[f"{display_g}_{a}"] = dict(zip(density['Frame'], density['Mean_Density']))
 
 events_df = pd.concat(all_events, ignore_index=True)
 
@@ -112,6 +113,7 @@ for st, data in heatmap_data.items():
 
     plt.suptitle(f'Density Heatmap for Stimulus: {st}')
     plt.savefig(os.path.join(output_dir, f'heatmap_{st}.png'), bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, f'heatmap_{st}.pdf'), bbox_inches='tight')
     plt.close()
 
 # 4. Statistical Comparison
@@ -150,7 +152,7 @@ for st in stimulus_types:
         continue
         
     fig, axes = plt.subplots(1, 2, figsize=(10, 5), sharey=True)
-    order = ['pm', 'po']
+    order = ['bw', 'po']
     
     # Baseline Plot
     sns.pointplot(x='Strain', y='Baseline_Mean_Density', data=st_data, order=order, capsize=0.1, errorbar='se', join=False, color='black', ax=axes[0])
@@ -169,6 +171,7 @@ for st in stimulus_types:
     plt.suptitle(f'Mean Density Comparison for Stimulus: {st}')
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, f'comparison_{st}.png'), bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, f'comparison_{st}.pdf'), bbox_inches='tight')
     plt.close()
 
 # 5. Summary Plots for Each Strain (All Stimulus Types, Before vs After)
@@ -177,7 +180,7 @@ long_df = pd.melt(animal_means, id_vars=['Strain', 'Animal', 'Type'],
                   var_name='Period', value_name='Density')
 long_df['Period'] = long_df['Period'].map({'Baseline_Mean_Density': 'Before', 'Trial_Mean_Density': 'After'})
 
-for strain in ['pm', 'po']:
+for strain in ['bw', 'po']:
     strain_df = long_df[long_df['Strain'] == strain]
     if len(strain_df) == 0: continue
     
@@ -201,10 +204,11 @@ for strain in ['pm', 'po']:
     plt.legend(handles[:2], labels[:2], title='Period')
     
     plt.savefig(os.path.join(output_dir, f'summary_comparison_{strain}.png'), bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, f'summary_comparison_{strain}.pdf'), bbox_inches='tight')
     plt.close()
 
 # 6. Summary Plots for Z-Scored Responses
-for strain in ['pm', 'po']:
+for strain in ['bw', 'po']:
     strain_df = animal_means[animal_means['Strain'] == strain]
     if len(strain_df) == 0: continue
     
@@ -224,6 +228,7 @@ for strain in ['pm', 'po']:
     plt.axhline(0, color='gray', linestyle='--') # Add line for zero (baseline level)
     
     plt.savefig(os.path.join(output_dir, f'zscore_summary_{strain}.png'), bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, f'zscore_summary_{strain}.pdf'), bbox_inches='tight')
     plt.close()
 
 # Export the summary data (including Z-scores) to CSV for statistical analysis
