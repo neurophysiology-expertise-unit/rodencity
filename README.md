@@ -1,16 +1,25 @@
-# Mouse Video Annotation Tool
+# Rodencity
 
-A powerful PyQt5-based desktop pipeline application to load `.avi` videos and automatically detect test subjects (such as mice) using multithreaded computer vision, while allowing seamless manual gap corrections.
-Pixel densities and spatial tracks are logged rigorously to CSV logs for behavioral extraction.
+A PyQt5-based desktop suite for rodent video analysis. On launch, a tool picker lets you choose between two independent modules:
+
+| Tool | Purpose |
+|------|---------|
+| **Analysis Pipeline** | Automated detection via background subtraction, arena masking, and density tracking |
+| **Behavior Annotator** | Manually label behavioral events (seizure, grooming, rearing…) as time intervals — works over Samba/network shares via local caching |
 
 ## Requirements
-Make sure you have a python environment (e.g., Anaconda). We recommend creating a new environment using **Python 3.10** (which has been tested and verified to work perfectly):
+Make sure you have a python environment manager like Anaconda or Miniconda.
 
-```bash
-conda create -n rodencity python=3.10 -y
-conda activate rodencity
-pip install -r requirements.txt
-```
+### Environment Setup
+
+1.  Create a new Conda environment from the `environment.yml` file:
+    ```bash
+    conda env create -f environment.yml
+    ```
+2.  Activate the newly created environment:
+    ```bash
+    conda activate density_heatmap_env
+    ```
 
 ## How to Run
 ```bash
@@ -35,7 +44,47 @@ pyinstaller --onefile --windowed main.py --name rodencity
 > If your `.exe` crashes instantly with `no qt platform plugin could be initialized`, it is because the standard `opencv-python` comes bundled with its own Qt plugins which overwrite and conflict with `PyQt5` during the PyInstaller build sequence.
 > **Fix:** Ensure you have uninstalled `opencv-python` and exclusively installed `opencv-python-headless` in your environment prior to running PyInstaller!
 
-## Analytical Pipeline & Usage
+---
+
+## Behavior Annotator
+
+Designed for labeling behavioral events (e.g. seizures, grooming bouts) directly in videos stored on Samba/network shares, where random-seek playback would otherwise be too slow.
+
+### How it works
+When a user opens a video, the tool **copies it to a local temp directory** (`%TEMP%\rodencity_cache\` on Windows, `/tmp/rodencity_cache/` on Linux) before opening it. Subsequent opens of the same file (matched by filename + size) skip the copy. Playback then runs entirely from local storage at full speed.
+
+### Workflow
+1. **Load Video** — select any `.avi`, `.mp4`, `.mkv`, or `.mov` file. A progress bar tracks the local copy.
+2. **Scrub** — use the slider, `A`/`D` or `←`/`→` arrow keys to navigate frames. Use the speed spinner to play back at 0.1× – 8× speed.
+3. **Choose a label** — pick a preset (`seizure`, `grooming`, `rearing`, `freezing`, `exploration`, `other`) or type a custom label.
+4. **Mark the interval** — navigate to the first frame of the event and press `S` (or **Mark Start**). Navigate to the last frame and press `E` (or **Mark End**).
+5. **Add** — press `Enter` (or **+ Add Annotation**). The event is immediately appended to the list and saved.
+6. **Remove** — select any row and click **- Remove Selected**.
+
+### Keyboard shortcuts
+| Key | Action |
+|-----|--------|
+| `Space` | Play / Pause |
+| `A` / `←` | Previous frame |
+| `D` / `→` | Next frame |
+| `S` | Mark start frame |
+| `E` | Mark end frame |
+| `Enter` | Add annotation |
+
+### Output CSV
+Annotations are saved automatically to `<video_name>_behavior_annotations.csv` **next to the original source video** (on the network share), so all lab members see the same file. Columns:
+
+```
+Label, Start_Frame, End_Frame, Start_Time_Sec, End_Time_Sec, Duration_Sec
+```
+
+### Notes
+- The local cache is never automatically deleted — clear `rodencity_cache` manually if disk space is a concern.
+- Works identically on Windows and Linux. No extra dependencies beyond what the existing environment already provides.
+
+---
+
+## Analysis Pipeline & Usage
 
 To ensure data integrity and prevent errors, the GUI layout enforces a strict 5-Step sequential order:
 
@@ -84,9 +133,18 @@ This engine structurally analyzes the physical pixel representations and parses 
 
 ### Instant Statistical Visualization Plots
 Deploy the natively bundled chart render utility directly against your resulting csv sheets to isolate temporal anomalies without interacting with deep programming languages!
-```bash
-python scripts/visualize.py --metrics spatial_metrics_results.csv
-```
-**This automatically compiles:**
-- `area_over_time.png`: Maps target contour "shrinking/enlargement" logic sequentially along timestamps (excellent for monitoring body tension or scatter responses).
-- `motion_trajectory.png`: Visualizes structural X/Y tracking paths across the test arena (invaluable for continuous maze velocity calculations or exploration algorithms).
+
+- **Generate Standard Plots**:
+  ```bash
+  python scripts/visualize.py --metrics spatial_metrics_results.csv
+  ```
+  **This automatically compiles:**
+  - `area_over_time.png`: Maps target contour "shrinking/enlargement" logic sequentially along timestamps (excellent for monitoring body tension or scatter responses).
+  - `motion_trajectory.png`: Visualizes structural X/Y tracking paths across the test arena (invaluable for continuous maze velocity calculations or exploration algorithms).
+
+- **Generate Density Heatmap**:
+  To visualize the mean density across all stimulus events, use the `plot_density_heatmap.py` script. Make sure your `_density_stats.csv` and `_stimulus_events.csv` files are in the same directory.
+  ```bash
+  python plot_density_heatmap.py
+  ```
+  This will generate `density_heatmap.png`.
